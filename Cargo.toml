@@ -1,5 +1,5 @@
 [package]
-name = "rsp_wait"
+name = "waiter_map"
 version = "0.1.0"
 authors = ["Xudong Huang <huangxu008@hotmail.com>"]
 

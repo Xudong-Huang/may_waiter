@@ -12,103 +12,116 @@ use std::io::{self, Error, ErrorKind};
 use may::coroutine;
 use may::sync::{AtomicOption, Mutex, Blocker};
 
-pub struct Waiter<K, T> {
+struct Waiter<T> {
     blocker: Blocker,
     rsp: AtomicOption<T>,
-    id: K,
-    wmap: *const WaiterMap<K, T>,
 }
 
-unsafe impl<K, T> Send for Waiter<K, T> {}
-unsafe impl<K, T> Sync for Waiter<K, T> {}
-
-impl<K: Hash + Eq, T> Waiter<K, T> {
-    fn new(id: K, wmap: &WaiterMap<K, T>) -> Self {
+impl<T> Waiter<T> {
+    fn new() -> Self {
         Waiter {
-            id: id,
             blocker: Blocker::new(false),
             rsp: AtomicOption::none(),
-            wmap: wmap,
         }
     }
 
     fn set_rsp(&self, rsp: T) {
-        println!("p = {:p}", self);
         // set the response
         self.rsp.swap(rsp, Ordering::Release);
         // wake up the blocker
         self.blocker.unpark();
     }
+}
 
+pub struct WaiterGuard<'a, K: 'a, T: 'a> {
+    owner: &'a WaiterMap<K, T>,
+    id: K,
+}
+
+impl<'a, K: Hash + Eq + Debug, T> WaiterGuard<'a, K, T> {
     // wait for response
-    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T>
-        where K: Debug + Copy
-    {
-        use coroutine::ParkError;
-
-        let id = self.id;
-        let wmap = unsafe { &*self.wmap };
-        match self.blocker.park(timeout.into()) {
-            Ok(_) => {
-                match self.rsp.take(Ordering::Acquire) {
-                    Some(frame) => Ok(frame),
-                    None => panic!("unable to get the rsp, id={:?}", id),
-                }
-            }
-            Err(ParkError::Timeout) => {
-                // remove the req from req map
-                error!("timeout zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, id={:?}", id);
-                wmap.get_waiter(id);
-                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
-            }
-            Err(ParkError::Canceled) => {
-                error!("canceled id={:?}", id);
-                wmap.get_waiter(id);
-                coroutine::trigger_cancel_panic();
-            }
-        }
+    pub fn wait_rsp<D: Into<Option<Duration>>>(self, timeout: D) -> io::Result<T> {
+        self.owner.wait_rsp(&self.id, timeout.into())
     }
 }
 
 pub struct WaiterMap<K, T> {
     // TODO: use atomic hashmap instead
     // TODO: use a special KEY to avoid the Hashmap
-    map: Mutex<HashMap<K, *const Waiter<K, T>>>,
+    map: Mutex<HashMap<K, Waiter<T>>>,
 }
+
 
 unsafe impl<K, T> Send for WaiterMap<K, T> {}
 unsafe impl<K, T> Sync for WaiterMap<K, T> {}
 
-impl<K: Hash + Eq + Copy, T> WaiterMap<K, T> {
+impl<K: Hash + Eq, T> WaiterMap<K, T> {
     pub fn new() -> Self {
         WaiterMap { map: Mutex::new(HashMap::new()) }
     }
 
     // return a waiter on the stack!
-    // #[inline(always)]
-    pub fn new_waiter(&self, id: K) -> Box<Waiter<K, T>> {
-        let ret = Box::new(Waiter::new(id, self));
-        self.add_waiter(ret.as_ref());
-        ret
-    }
-
-    // the waiter must be alive on the stack!
-    fn add_waiter(&self, req: &Waiter<K, T>) {
+    pub fn new_waiter<'a>(&'a self, id: K) -> WaiterGuard<'a, K, T>
+        where K: Clone
+    {
         let mut m = self.map.lock().unwrap();
-        m.insert(req.id, req);
+        // if we add a same key, the old waiter would be lost!
+        m.insert(id.clone(), Waiter::new());
+        WaiterGuard {
+            owner: self,
+            id: id,
+        }
     }
 
     // used internally
-    fn get_waiter(&self, id: K) -> Option<&Waiter<K, T>> {
+    fn del_waiter(&self, id: &K) -> Option<Waiter<T>> {
         let mut m = self.map.lock().unwrap();
-        m.remove(&id).map(|v| unsafe { &*v })
+        m.remove(id)
+    }
+
+    fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T>
+        where K: Debug
+    {
+        use coroutine::ParkError;
+
+        let map = self.map.lock().unwrap();
+        let waiter: &Waiter<T> = match map.get(&id) {
+            Some(v) => unsafe { ::std::mem::transmute(v) },
+            None => unreachable!("can't find id in waiter map!"),
+        };
+        //release the mutex
+        drop(map);
+
+        let ret;
+        match waiter.blocker.park(timeout.into()) {
+            Ok(_) => {
+                match waiter.rsp.take(Ordering::Acquire) {
+                    Some(rsp) => ret = Ok(rsp),
+                    None => panic!("unable to get the rsp, id={:?}", id),
+                }
+            }
+            Err(ParkError::Timeout) => {
+                // remove the req from req map
+                error!("timeout zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, id={:?}", id);
+                ret = Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
+            }
+            Err(ParkError::Canceled) => {
+                error!("canceled id={:?}", id);
+                coroutine::trigger_cancel_panic();
+            }
+        }
+
+        // remove the entry
+        self.del_waiter(&id);
+        ret
     }
 
     // set rsp for the corresponding waiter
-    pub fn set_rsp(&self, id: K, rsp: T) -> Result<(), T> {
-        match self.get_waiter(id) {
-            Some(req) => {
-                req.set_rsp(rsp);
+    pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T> {
+        let m = self.map.lock().unwrap();
+        match m.get(id) {
+            Some(water) => {
+                water.set_rsp(rsp);
                 Ok(())
             }
             None => Err(rsp),
@@ -134,7 +147,7 @@ mod tests {
         // trigger the rsp in another coroutine
         coroutine::spawn(move || {
                              // send out the response
-                             rmap.set_rsp(1234, 100).ok();
+                             rmap.set_rsp(&1234, 100).ok();
                          });
 
         // this will block until the rsp was set
