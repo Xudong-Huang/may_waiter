@@ -1,6 +1,11 @@
 #[macro_use]
 extern crate log;
 extern crate may;
+extern crate rand;
+extern crate base64;
+extern crate crypto;
+
+pub mod waiter_token;
 
 use std::fmt::Debug;
 use std::hash::Hash;
