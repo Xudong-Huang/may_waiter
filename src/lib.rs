@@ -33,7 +33,7 @@ impl<T> Waiter<T> {
     }
 }
 
-pub struct WaiterGuard<'a, K: 'a, T: 'a> {
+pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
     id: K,
 }
@@ -42,6 +42,13 @@ impl<'a, K: Hash + Eq + Debug, T> WaiterGuard<'a, K, T> {
     // wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(&self.id, timeout.into())
+    }
+}
+
+impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
+    fn drop(&mut self) {
+        // remove the entry
+        self.owner.del_waiter(&self.id);
     }
 }
 
@@ -92,28 +99,23 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         //release the mutex
         drop(map);
 
-        let ret;
         match waiter.blocker.park(timeout.into()) {
             Ok(_) => {
                 match waiter.rsp.take(Ordering::Acquire) {
-                    Some(rsp) => ret = Ok(rsp),
+                    Some(rsp) => Ok(rsp),
                     None => panic!("unable to get the rsp, id={:?}", id),
                 }
             }
             Err(ParkError::Timeout) => {
                 // remove the req from req map
                 error!("timeout zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, id={:?}", id);
-                ret = Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
+                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
             }
             Err(ParkError::Canceled) => {
                 error!("canceled id={:?}", id);
                 coroutine::trigger_cancel_panic();
             }
         }
-
-        // remove the entry
-        self.del_waiter(&id);
-        ret
     }
 
     // set rsp for the corresponding waiter
@@ -140,15 +142,14 @@ mod tests {
         let req_map = Arc::new(WaiterMap::<usize, usize>::new());
         let rmap = req_map.clone();
 
+        let key = 1234;
+
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = req_map.new_waiter(1234);
+        let waiter = req_map.new_waiter(key);
 
         // trigger the rsp in another coroutine
-        coroutine::spawn(move || {
-                             // send out the response
-                             rmap.set_rsp(&1234, 100).ok();
-                         });
+        coroutine::spawn(move || rmap.set_rsp(&key, 100).ok());
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
