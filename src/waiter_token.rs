@@ -11,54 +11,6 @@ use may::sync::{AtomicOption, Blocker};
 use crypto::{symmetriccipher, buffer, aes, blockmodes};
 use crypto::buffer::{ReadBuffer, WriteBuffer, BufferResult};
 
-pub struct Waiter<T> {
-    blocker: Blocker,
-    rsp: AtomicOption<T>,
-}
-
-impl<T> Waiter<T> {
-    pub fn new() -> Self {
-        Waiter {
-            blocker: Blocker::new(false),
-            rsp: AtomicOption::none(),
-        }
-    }
-
-    pub fn set_rsp(&self, rsp: T) {
-        // set the response
-        self.rsp.swap(rsp, Ordering::Release);
-        // wake up the blocker
-        self.blocker.unpark();
-    }
-
-    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
-        use coroutine::ParkError;
-        match self.blocker.park(timeout.into()) {
-            Ok(_) => {
-                match self.rsp.take(Ordering::Acquire) {
-                    Some(rsp) => Ok(rsp),
-                    None => panic!("unable to get the rsp, waiter={:p}", &self),
-                }
-            }
-            Err(ParkError::Timeout) => {
-                error!("waiter timeout {:p}", &self);
-                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
-            }
-            Err(ParkError::Canceled) => {
-                error!("waiter canceled {:p}", &self);
-                coroutine::trigger_cancel_panic();
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct WaiterToken {
-    key: [u8; 32],
-    iv: [u8; 16],
-    nonce: [u8; 16],
-}
-
 fn ref_to_bytes<T>(ptr: &T) -> [u8; 8] {
     unsafe { ::std::mem::transmute(ptr) }
 }
@@ -77,7 +29,7 @@ fn encrypt(data: &[u8],
     // Create an encryptor instance of the best performing
     // type available for the platform.
     let mut encryptor =
-        aes::cbc_encryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
+        aes::cbc_encryptor(aes::KeySize::KeySize128, key, iv, blockmodes::PkcsPadding);
 
     // Each encryption operation encrypts some data from
     // an input buffer into an output buffer. Those buffers
@@ -143,7 +95,7 @@ fn decrypt(encrypted_data: &[u8],
            iv: &[u8])
            -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
     let mut decryptor =
-        aes::cbc_decryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
+        aes::cbc_decryptor(aes::KeySize::KeySize128, key, iv, blockmodes::PkcsPadding);
 
     let mut final_result = Vec::<u8>::new();
     let mut read_buffer = buffer::RefReadBuffer::new(encrypted_data);
@@ -166,28 +118,75 @@ fn decrypt(encrypted_data: &[u8],
     Ok(final_result)
 }
 
+pub struct Waiter<T> {
+    blocker: Blocker,
+    rsp: AtomicOption<T>,
+}
+
+impl<T> Waiter<T> {
+    pub fn new() -> Self {
+        Waiter {
+            blocker: Blocker::new(false),
+            rsp: AtomicOption::none(),
+        }
+    }
+
+    pub fn set_rsp(&self, rsp: T) {
+        // set the response
+        self.rsp.swap(rsp, Ordering::Release);
+        // wake up the blocker
+        self.blocker.unpark();
+    }
+
+    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
+        use self::coroutine::ParkError;
+        match self.blocker.park(timeout.into()) {
+            Ok(_) => {
+                match self.rsp.take(Ordering::Acquire) {
+                    Some(rsp) => Ok(rsp),
+                    None => panic!("unable to get the rsp, waiter={:p}", &self),
+                }
+            }
+            Err(ParkError::Timeout) => {
+                error!("waiter timeout {:p}", &self);
+                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
+            }
+            Err(ParkError::Canceled) => {
+                error!("waiter canceled {:p}", &self);
+                coroutine::trigger_cancel_panic();
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct WaiterToken {
+    key: [u8; 16],
+    iv: [u8; 16],
+    salt: [u8; 8],
+}
+
 impl WaiterToken {
     pub fn new() -> Self {
-        // generate random key and nonce
+        // generate random key and salt
         let mut rng = OsRng::new().unwrap();
-        let mut key = [0u8; 32];
+        let mut key = [0u8; 16];
         let mut iv = [0u8; 16];
-        let mut nonce = [0u8; 16];
+        let mut salt = [0u8; 8];
         rng.fill_bytes(&mut key);
         rng.fill_bytes(&mut iv);
-        rng.fill_bytes(&mut nonce);
-        println!("key={:?}, iv={:?}, nonce={:?}", key, iv, nonce);
+        rng.fill_bytes(&mut salt);
+        // println!("key={:?}, iv={:?}, salt={:?}", key, iv, salt);
         WaiterToken {
             key: key,
             iv: iv,
-            nonce: nonce,
+            salt: salt,
         }
     }
 
     pub fn waiter_to_token<T>(&self, waiter: &Waiter<T>) -> String {
-        println!("waiter_s={:p}", waiter);
-        //first serial nonce
-        let mut data = Vec::from_iter(self.nonce.iter().map(|&i| i));
+        //first serial salt
+        let mut data = Vec::from_iter(self.salt.iter().map(|&i| i));
         // then serial ptr
         data.extend(ref_to_bytes(waiter).iter());
 
@@ -206,23 +205,23 @@ impl WaiterToken {
             Ok(data) => data,
             Err(_) => return None,
         };
+        const SALT_LEN: usize = 8;
 
-        if result.len() != 24 {
+        if result.len() != SALT_LEN + 8 {
             return None;
         }
 
-        let mut data = [0u8; 16];
-        data.copy_from_slice(&result[0..16]);
-        // need to verify if the nonce is correct
-        if data != self.nonce {
+        let mut data = [0u8; SALT_LEN];
+        data.copy_from_slice(&result[0..SALT_LEN]);
+        // need to verify if the salt is correct
+        if data != self.salt {
             return None;
         }
 
         let mut data = [0u8; 8];
-        data.copy_from_slice(&result[16..]);
+        data.copy_from_slice(&result[SALT_LEN..]);
         let ptr = bytes_to_ref::<&Waiter<T>>(data);
         let waiter = unsafe { &*(ptr as *const _) };
-        println!("waiter={:p}", waiter);
         Some(waiter)
     }
 }
@@ -232,7 +231,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn token_waiter() {
+    fn test_token_waiter() {
         use std::sync::Arc;
         let req_map = Arc::new(WaiterToken::new());
         let rmap = req_map.clone();
