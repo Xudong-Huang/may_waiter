@@ -1,11 +1,10 @@
-extern crate may;
-extern crate co_waiter;
+# coroutine waiter library
 
-use std::sync::Arc;
-use may::coroutine;
-use co_waiter::WaiterMap;
-use co_waiter::{WaiterToken, Waiter};
+this library provide a map associated or token associated bloking
+primitive that waiting for a response.
 
+* the map associated interface is through `WaiterMap`
+```rust
 fn test_waiter_map() {
     let req_map = Arc::new(WaiterMap::<usize, usize>::new());
     let rmap = req_map.clone();
@@ -23,7 +22,10 @@ fn test_waiter_map() {
     let result = waiter.wait_rsp(None).unwrap();
     assert_eq!(result, 100);
 }
+```
 
+* the token associated interface is through `WaiterToken and Waiter`
+```rust
 fn test_waiter_token() {
     use std::time::Duration;
     let req_toker = Arc::new(WaiterToken::new());
@@ -41,8 +43,9 @@ fn test_waiter_token() {
     let result = waiter.wait_rsp(Duration::from_millis(100)).unwrap();
     assert_eq!(result, 100);
 }
+```
 
-fn main() {
-    test_waiter_map();
-    test_waiter_token();
-}
+> **Note**
+> the `WaiterToken` interface doesn't need to maintain a map inside.
+> instead we use a safe token to calculate the correct `Waiter` 
+>
