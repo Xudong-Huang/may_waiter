@@ -51,7 +51,7 @@ impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
 pub struct WaiterMap<K, T> {
     // TODO: use atomic hashmap instead
     // TODO: use a special KEY to avoid the Hashmap
-    map: Mutex<HashMap<K, Waiter<T>>>,
+    map: Mutex<HashMap<K, Box<Waiter<T>>>>,
 }
 
 
@@ -69,7 +69,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     {
         let mut m = self.map.lock().unwrap();
         // if we add a same key, the old waiter would be lost!
-        m.insert(id.clone(), Waiter::new());
+        m.insert(id.clone(), Box::new(Waiter::new()));
         WaiterGuard {
             owner: self,
             id: id,
@@ -77,7 +77,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     // used internally
-    fn del_waiter(&self, id: &K) -> Option<Waiter<T>> {
+    fn del_waiter(&self, id: &K) -> Option<Box<Waiter<T>>> {
         let mut m = self.map.lock().unwrap();
         m.remove(id)
     }
@@ -87,11 +87,17 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     {
         use self::coroutine::ParkError;
 
+        fn extend_lifetime<'a, T>(r: &T) -> &'a T {
+            unsafe { ::std::mem::transmute(r) }
+        }
+
         let map = self.map.lock().unwrap();
-        let waiter: &Waiter<T> = match map.get(&id) {
-            Some(v) => unsafe { ::std::mem::transmute(v) },
+        let waiter = match map.get(&id) {
+            // extends the lifetime of the waiter ref
+            Some(v) => extend_lifetime(v.as_ref()),
             None => unreachable!("can't find id in waiter map!"),
         };
+
         //release the mutex
         drop(map);
 
@@ -115,11 +121,13 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     // set rsp for the corresponding waiter
-    pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T> {
+    pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T>
+        where K: Debug
+    {
         let m = self.map.lock().unwrap();
         match m.get(id) {
-            Some(water) => {
-                water.set_rsp(rsp);
+            Some(waiter) => {
+                waiter.set_rsp(rsp);
                 Ok(())
             }
             None => Err(rsp),
