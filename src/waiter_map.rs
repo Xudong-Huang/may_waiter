@@ -14,7 +14,7 @@ pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
 
 impl<'a, K: Hash + Eq + Debug, T> WaiterGuard<'a, K, T> {
     // wait for response
-    pub fn wait_rsp<D: Into<Option<Duration>>>(self, timeout: D) -> io::Result<T> {
+    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(&self.id, timeout.into())
     }
 }
