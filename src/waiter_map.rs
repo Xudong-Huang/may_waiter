@@ -1,33 +1,11 @@
+use std::io;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Duration;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
-use std::io::{self, Error, ErrorKind};
 
-use may::coroutine;
-use may::sync::{AtomicOption, Mutex, Blocker};
-
-struct Waiter<T> {
-    blocker: Blocker,
-    rsp: AtomicOption<T>,
-}
-
-impl<T> Waiter<T> {
-    fn new() -> Self {
-        Waiter {
-            blocker: Blocker::new(false),
-            rsp: AtomicOption::none(),
-        }
-    }
-
-    fn set_rsp(&self, rsp: T) {
-        // set the response
-        self.rsp.swap(rsp, Ordering::Release);
-        // wake up the blocker
-        self.blocker.unpark();
-    }
-}
+use Waiter;
+use may::sync::Mutex;
 
 pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
@@ -50,7 +28,6 @@ impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
 
 pub struct WaiterMap<K, T> {
     // TODO: use atomic hashmap instead
-    // TODO: use a special KEY to avoid the Hashmap
     map: Mutex<HashMap<K, Box<Waiter<T>>>>,
 }
 
@@ -85,8 +62,6 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T>
         where K: Debug
     {
-        use self::coroutine::ParkError;
-
         fn extend_lifetime<'a, T>(r: &T) -> &'a T {
             unsafe { ::std::mem::transmute(r) }
         }
@@ -101,23 +76,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         //release the mutex
         drop(map);
 
-        match waiter.blocker.park(timeout.into()) {
-            Ok(_) => {
-                match waiter.rsp.take(Ordering::Acquire) {
-                    Some(rsp) => Ok(rsp),
-                    None => panic!("unable to get the rsp, id={:?}", id),
-                }
-            }
-            Err(ParkError::Timeout) => {
-                // remove the req from req map
-                error!("timeout zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, id={:?}", id);
-                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
-            }
-            Err(ParkError::Canceled) => {
-                error!("canceled id={:?}", id);
-                coroutine::trigger_cancel_panic();
-            }
-        }
+        waiter.wait_rsp(timeout)
     }
 
     // set rsp for the corresponding waiter
@@ -139,6 +98,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use may::coroutine;
 
     #[test]
     fn test_waiter_map() {
