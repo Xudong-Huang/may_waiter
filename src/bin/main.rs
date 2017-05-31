@@ -35,7 +35,7 @@ fn test_waiter_token() {
     let token = req_toker.waiter_to_token(&waiter);
     println!("token={}", token);
     // trigger the rsp in another coroutine
-    coroutine::spawn(move || rtoker.token_to_waiter(&token).map(|w| w.set_rsp(100)));
+    coroutine::spawn(move || unsafe { rtoker.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
 
     // this will block until the rsp was set
     let result = waiter.wait_rsp(Duration::from_millis(100)).unwrap();

@@ -150,7 +150,10 @@ impl WaiterToken {
         base64::encode(&encrypt_data)
     }
 
-    pub fn token_to_waiter<T>(&self, token: &str) -> Option<&Waiter<T>> {
+
+    // NOTE: should be unsafe here if two same rsp is send but the waiter is gone!
+    // access remote address directly is always a problem
+    pub unsafe fn token_to_waiter<T>(&self, token: &str) -> Option<&Waiter<T>> {
         let raw_data = match base64::decode(token.as_bytes()) {
             Ok(data) => data,
             Err(_) => return None,
@@ -176,7 +179,7 @@ impl WaiterToken {
         let mut data = [0u8; 8];
         data.copy_from_slice(&result[SALT_LEN..]);
         let ptr = bytes_to_ref::<&Waiter<T>>(data);
-        let waiter = unsafe { &*(ptr as *const _) };
+        let waiter = &*(ptr as *const _);
         Some(waiter)
     }
 }
@@ -198,7 +201,7 @@ mod tests {
         let token = req_map.waiter_to_token(&waiter);
         println!("token={}", token);
         // trigger the rsp in another coroutine
-        coroutine::spawn(move || rmap.token_to_waiter(&token).map(|w| w.set_rsp(100)));
+        coroutine::spawn(move || unsafe { rmap.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
