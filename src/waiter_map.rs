@@ -1,12 +1,13 @@
 use std::io;
-use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Duration;
+use std::fmt::{self, Debug};
 use std::collections::HashMap;
 
 use Waiter;
 use may::sync::Mutex;
 
+#[derive(Debug)]
 pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
     id: K,
@@ -29,6 +30,12 @@ impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
 pub struct WaiterMap<K, T> {
     // TODO: use atomic hashmap instead
     map: Mutex<HashMap<K, Box<Waiter<T>>>>,
+}
+
+impl<K: Hash + Eq, T> Debug for WaiterMap<K, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "WaiterMap{{ ... }}")
+    }
 }
 
 
