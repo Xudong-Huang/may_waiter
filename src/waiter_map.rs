@@ -38,6 +38,11 @@ impl<K: Hash + Eq, T> Debug for WaiterMap<K, T> {
     }
 }
 
+impl<K: Hash + Eq, T> Default for WaiterMap<K, T> {
+    fn default() -> Self {
+        WaiterMap::new()
+    }
+}
 
 unsafe impl<K, T> Send for WaiterMap<K, T> {}
 unsafe impl<K, T> Sync for WaiterMap<K, T> {}
@@ -48,8 +53,9 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     // return a waiter on the stack!
-    pub fn new_waiter<'a>(&'a self, id: K) -> WaiterGuard<'a, K, T>
-        where K: Clone
+    pub fn new_waiter(&self, id: K) -> WaiterGuard<K, T>
+    where
+        K: Clone,
     {
         let mut m = self.map.lock().unwrap();
         // if we add a same key, the old waiter would be lost!
@@ -67,14 +73,15 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T>
-        where K: Debug
+    where
+        K: Debug,
     {
         fn extend_lifetime<'a, T>(r: &T) -> &'a T {
             unsafe { ::std::mem::transmute(r) }
         }
 
         let map = self.map.lock().unwrap();
-        let waiter = match map.get(&id) {
+        let waiter = match map.get(id) {
             // extends the lifetime of the waiter ref
             Some(v) => extend_lifetime(v.as_ref()),
             None => unreachable!("can't find id in waiter map!"),
@@ -88,7 +95,8 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 
     // set rsp for the corresponding waiter
     pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T>
-        where K: Debug
+    where
+        K: Debug,
     {
         let m = self.map.lock().unwrap();
         match m.get(id) {

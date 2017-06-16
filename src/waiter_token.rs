@@ -68,7 +68,7 @@ fn encrypt(data: &[u8],
                                 .take_read_buffer()
                                 .take_remaining()
                                 .iter()
-                                .map(|&i| i));
+                                .cloned());
 
         match result {
             BufferResult::BufferUnderflow => break,
@@ -104,7 +104,7 @@ fn decrypt(encrypted_data: &[u8],
                                 .take_read_buffer()
                                 .take_remaining()
                                 .iter()
-                                .map(|&i| i));
+                                .cloned());
         match result {
             BufferResult::BufferUnderflow => break,
             BufferResult::BufferOverflow => {}
@@ -119,6 +119,12 @@ pub struct WaiterToken {
     key: [u8; 16],
     iv: [u8; 16],
     salt: [u8; 8],
+}
+
+impl Default for WaiterToken {
+    fn default() -> Self {
+        WaiterToken::new()
+    }
 }
 
 impl WaiterToken {
@@ -141,7 +147,7 @@ impl WaiterToken {
 
     pub fn waiter_to_token<T>(&self, waiter: &Waiter<T>) -> String {
         //first serial salt
-        let mut data = Vec::from_iter(self.salt.iter().map(|&i| i));
+        let mut data = Vec::from_iter(self.salt.iter().cloned());
         // then serial ptr
         data.extend(ref_to_bytes(waiter).iter());
 

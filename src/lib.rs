@@ -64,5 +64,11 @@ impl<T> fmt::Debug for Waiter<T> {
     }
 }
 
+impl<T> Default for Waiter<T> {
+    fn default() -> Self {
+        Waiter::new()
+    }
+}
+
 pub use waiter_token::WaiterToken;
 pub use waiter_map::{WaiterMap, WaiterGuard};
