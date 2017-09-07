@@ -1,8 +1,12 @@
 #[macro_use]
 extern crate log;
 extern crate may;
+
+#[cfg(feature = "token")]
 extern crate rand;
+#[cfg(feature = "token")]
 extern crate base64;
+#[cfg(feature = "token")]
 extern crate crypto;
 
 use std::{io, fmt};
@@ -13,6 +17,7 @@ use may::coroutine;
 use may::sync::{AtomicOption, Blocker};
 
 mod waiter_map;
+#[cfg(feature = "token")]
 mod waiter_token;
 
 pub struct Waiter<T> {
@@ -70,5 +75,6 @@ impl<T> Default for Waiter<T> {
     }
 }
 
+#[cfg(feature = "token")]
 pub use waiter_token::WaiterToken;
 pub use waiter_map::{WaiterMap, WaiterGuard};

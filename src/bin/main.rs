@@ -4,7 +4,9 @@ extern crate co_waiter;
 use std::sync::Arc;
 use may::coroutine;
 use co_waiter::WaiterMap;
-use co_waiter::{WaiterToken, Waiter};
+
+#[cfg(feature = "token")]
+use co_waiter::{Waiter, WaiterToken};
 
 fn test_waiter_map() {
     let req_map = Arc::new(WaiterMap::<usize, usize>::new());
@@ -24,6 +26,7 @@ fn test_waiter_map() {
     assert_eq!(result, 100);
 }
 
+#[cfg(feature = "token")]
 fn test_waiter_token() {
     use std::time::Duration;
     let req_toker = Arc::new(WaiterToken::new());
@@ -44,5 +47,6 @@ fn test_waiter_token() {
 
 fn main() {
     test_waiter_map();
+    #[cfg(feature = "token")]
     test_waiter_token();
 }
