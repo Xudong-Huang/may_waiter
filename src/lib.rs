@@ -1,16 +1,7 @@
-#[macro_use]
-extern crate log;
 #[cfg_attr(test, macro_use)]
 extern crate may;
 
-#[cfg(feature = "token")]
-extern crate rand;
-#[cfg(feature = "token")]
-extern crate base64;
-#[cfg(feature = "token")]
-extern crate crypto;
-
-use std::{io, fmt};
+use std::{fmt, io};
 use std::time::Duration;
 use std::sync::atomic::Ordering;
 
@@ -18,8 +9,6 @@ use may::coroutine;
 use may::sync::{AtomicOption, Blocker};
 
 mod waiter_map;
-#[cfg(feature = "token")]
-mod waiter_token;
 
 pub struct Waiter<T> {
     blocker: Blocker,
@@ -46,18 +35,12 @@ impl<T> Waiter<T> {
         use coroutine::ParkError;
 
         match self.blocker.park(timeout.into()) {
-            Ok(_) => {
-                match self.rsp.take(Ordering::Acquire) {
-                    Some(rsp) => Ok(rsp),
-                    None => panic!("unable to get the rsp, waiter={:p}", &self),
-                }
-            }
-            Err(ParkError::Timeout) => {
-                error!("waiter timeout {:p}", &self);
-                Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
-            }
+            Ok(_) => match self.rsp.take(Ordering::Acquire) {
+                Some(rsp) => Ok(rsp),
+                None => panic!("unable to get the rsp, waiter={:p}", &self),
+            },
+            Err(ParkError::Timeout) => Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout")),
             Err(ParkError::Canceled) => {
-                error!("waiter canceled {:p}", &self);
                 coroutine::trigger_cancel_panic();
             }
         }
@@ -76,6 +59,4 @@ impl<T> Default for Waiter<T> {
     }
 }
 
-#[cfg(feature = "token")]
-pub use waiter_token::WaiterToken;
-pub use waiter_map::{WaiterMap, WaiterGuard};
+pub use waiter_map::{WaiterGuard, WaiterMap};

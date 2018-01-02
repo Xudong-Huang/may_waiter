@@ -4,12 +4,4 @@ version = "0.1.0"
 authors = ["Xudong Huang <huangxu008@hotmail.com>"]
 
 [dependencies]
-log = "0.3"
 may = "0.2"
-rand = { version = "0.3", optional = true }
-base64 = { version = "0.5", optional = true }
-rust-crypto = { version = "0.2", optional = true }
-
-[features]
-default = []
-token = ["rand", "base64", "rust-crypto"]
