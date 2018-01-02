@@ -1,11 +1,10 @@
-
 use std::iter::FromIterator;
 
 use Waiter;
 use base64;
-use rand::{Rng, OsRng};
-use crypto::{symmetriccipher, buffer, aes, blockmodes};
-use crypto::buffer::{ReadBuffer, WriteBuffer, BufferResult};
+use rand::{OsRng, Rng};
+use crypto::{aes, blockmodes, buffer, symmetriccipher};
+use crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer};
 
 fn ref_to_bytes<T>(ptr: &T) -> [u8; 8] {
     unsafe { ::std::mem::transmute(ptr) }
@@ -17,11 +16,11 @@ fn bytes_to_ref<T>(bytes: [u8; 8]) -> *const T {
 
 // Encrypt a buffer with the given key and iv using
 // AES-256/CBC/Pkcs encryption.
-fn encrypt(data: &[u8],
-           key: &[u8],
-           iv: &[u8])
-           -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
-
+fn encrypt(
+    data: &[u8],
+    key: &[u8],
+    iv: &[u8],
+) -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
     // Create an encryptor instance of the best performing
     // type available for the platform.
     let mut encryptor =
@@ -64,11 +63,13 @@ fn encrypt(data: &[u8],
         // from the writable buffer, create a new readable buffer which
         // contains all data that has been written, and then access all
         // of that data as a slice.
-        final_result.extend(write_buffer
-                                .take_read_buffer()
-                                .take_remaining()
-                                .iter()
-                                .cloned());
+        final_result.extend(
+            write_buffer
+                .take_read_buffer()
+                .take_remaining()
+                .iter()
+                .cloned(),
+        );
 
         match result {
             BufferResult::BufferUnderflow => break,
@@ -86,10 +87,11 @@ fn encrypt(data: &[u8],
 // comments in that function. In non-example code, if desired, it is possible to
 // share much of the implementation using closures to hide the operation
 // being performed. However, such code would make this example less clear.
-fn decrypt(encrypted_data: &[u8],
-           key: &[u8],
-           iv: &[u8])
-           -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
+fn decrypt(
+    encrypted_data: &[u8],
+    key: &[u8],
+    iv: &[u8],
+) -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
     let mut decryptor =
         aes::cbc_decryptor(aes::KeySize::KeySize128, key, iv, blockmodes::PkcsPadding);
 
@@ -100,11 +102,13 @@ fn decrypt(encrypted_data: &[u8],
 
     loop {
         let result = try!(decryptor.decrypt(&mut read_buffer, &mut write_buffer, true));
-        final_result.extend(write_buffer
-                                .take_read_buffer()
-                                .take_remaining()
-                                .iter()
-                                .cloned());
+        final_result.extend(
+            write_buffer
+                .take_read_buffer()
+                .take_remaining()
+                .iter()
+                .cloned(),
+        );
         match result {
             BufferResult::BufferUnderflow => break,
             BufferResult::BufferOverflow => {}
@@ -156,7 +160,6 @@ impl WaiterToken {
         base64::encode(&encrypt_data)
     }
 
-
     // NOTE: should be unsafe here if two same rsp is send but the waiter is gone!
     // access remote address directly is always a problem
     pub unsafe fn token_to_waiter<T>(&self, token: &str) -> Option<&Waiter<T>> {
@@ -207,7 +210,7 @@ mod tests {
         let token = req_map.waiter_to_token(&waiter);
         println!("token={}", token);
         // trigger the rsp in another coroutine
-        coroutine::spawn(move || unsafe { rmap.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
+        go!(move || unsafe { rmap.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();

@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+#[cfg_attr(test, macro_use)]
 extern crate may;
 
 #[cfg(feature = "token")]

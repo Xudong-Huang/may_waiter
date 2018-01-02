@@ -1,8 +1,8 @@
-extern crate may;
 extern crate co_waiter;
+#[macro_use]
+extern crate may;
 
 use std::sync::Arc;
-use may::coroutine;
 use co_waiter::WaiterMap;
 
 #[cfg(feature = "token")]
@@ -19,7 +19,7 @@ fn test_waiter_map() {
     let waiter = req_map.new_waiter(key);
 
     // trigger the rsp in another coroutine
-    coroutine::spawn(move || rmap.set_rsp(&key, 100).ok());
+    go!(move || rmap.set_rsp(&key, 100).ok());
 
     // this will block until the rsp was set
     let result = waiter.wait_rsp(None).unwrap();
@@ -38,7 +38,7 @@ fn test_waiter_token() {
     let token = req_toker.waiter_to_token(&waiter);
     println!("token={}", token);
     // trigger the rsp in another coroutine
-    coroutine::spawn(move || unsafe { rtoker.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
+    go!(move || unsafe { rtoker.token_to_waiter(&token) }.map(|w| w.set_rsp(100)));
 
     // this will block until the rsp was set
     let result = waiter.wait_rsp(Duration::from_millis(100)).unwrap();

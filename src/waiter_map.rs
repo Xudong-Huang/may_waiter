@@ -49,7 +49,9 @@ unsafe impl<K, T> Sync for WaiterMap<K, T> {}
 
 impl<K: Hash + Eq, T> WaiterMap<K, T> {
     pub fn new() -> Self {
-        WaiterMap { map: Mutex::new(HashMap::new()) }
+        WaiterMap {
+            map: Mutex::new(HashMap::new()),
+        }
     }
 
     // return a waiter on the stack!
@@ -109,11 +111,9 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use may::coroutine;
 
     #[test]
     fn test_waiter_map() {
@@ -128,7 +128,7 @@ mod tests {
         let waiter = req_map.new_waiter(key);
 
         // trigger the rsp in another coroutine
-        coroutine::spawn(move || rmap.set_rsp(&key, 100).ok());
+        go!(move || rmap.set_rsp(&key, 100).ok());
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
