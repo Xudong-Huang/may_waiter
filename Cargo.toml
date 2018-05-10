@@ -1,7 +1,21 @@
 [package]
-name = "co_waiter"
-version = "0.1.0"
+name = "may_waiter"
+version = "0.1"
 authors = ["Xudong Huang <huangxu008@hotmail.com>"]
+license = "MIT/Apache-2.0"
+repository = "https://github.com/Xudong-Huang/may_waiter.git"
+homepage = "https://github.com/Xudong-Huang/may_waiter.git"
+documentation = "https://docs.rs/may_waiter"
+description = "Simple coroutine communication blocker"
+readme = "README.md"
+keywords = ["coroutine", "multi-thread"]
+categories = ["concurrency"]
+exclude = [
+    ".gitignore",
+    ".travis.yml",
+    "appveyor.yml",
+    "benches/**/*",
+]
 
 [dependencies]
 may = "0.3"

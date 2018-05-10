@@ -1,7 +1,6 @@
 # coroutine waiter library
 
-this library provide a map associated or token associated bloking
-primitive that waiting for a response.
+This library provide a map associated blocking primitive that waiting for a response produced by another coroutine
 
 * the map associated interface is through `WaiterMap`
 ```rust
