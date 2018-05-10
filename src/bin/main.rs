@@ -1,9 +1,9 @@
-extern crate co_waiter;
+extern crate may_waiter;
 #[macro_use]
 extern crate may;
 
+use may_waiter::WaiterMap;
 use std::sync::Arc;
-use co_waiter::WaiterMap;
 
 fn test_waiter_map() {
     let req_map = Arc::new(WaiterMap::<usize, usize>::new());
