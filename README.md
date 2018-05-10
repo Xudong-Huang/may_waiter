@@ -1,6 +1,12 @@
+[![Build Status](https://travis-ci.org/Xudong-Huang/may_waiter.svg?branch=master)](https://travis-ci.org/Xudong-Huang/may_waiter)
+[![Current Crates.io Version](https://img.shields.io/crates/v/may_waiter.svg)](https://crates.io/crates/may_waiter)
+[![Document](https://img.shields.io/badge/doc-may_waiter-green.svg)](https://docs.rs/may_waiter)
 # coroutine waiter library
 
 This library provide a map associated blocking primitive that waiting for a response produced by another coroutine
+
+
+## Usage
 
 * the map associated interface is through `WaiterMap`
 ```rust
