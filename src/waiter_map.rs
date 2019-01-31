@@ -1,11 +1,11 @@
-use std::io;
-use std::hash::Hash;
-use std::time::Duration;
-use std::fmt::{self, Debug};
 use std::collections::HashMap;
+use std::fmt::{self, Debug};
+use std::hash::Hash;
+use std::io;
+use std::time::Duration;
 
-use Waiter;
 use may::sync::Mutex;
+use Waiter;
 
 #[derive(Debug)]
 pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
@@ -54,7 +54,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         }
     }
 
-    // return a waiter on the stack!
+    /// return a waiter on the stack!
     pub fn new_waiter(&self, id: K) -> WaiterGuard<K, T>
     where
         K: Clone,
@@ -62,10 +62,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         let mut m = self.map.lock().unwrap();
         // if we add a same key, the old waiter would be lost!
         m.insert(id.clone(), Box::new(Waiter::new()));
-        WaiterGuard {
-            owner: self,
-            id: id,
-        }
+        WaiterGuard { owner: self, id }
     }
 
     // used internally
@@ -95,7 +92,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         waiter.wait_rsp(timeout)
     }
 
-    // set rsp for the corresponding waiter
+    /// set rsp for the corresponding waiter
     pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T>
     where
         K: Debug,
@@ -107,6 +104,14 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
                 Ok(())
             }
             None => Err(rsp),
+        }
+    }
+
+    /// cancel all the waiting waiter, all wait would return NotFound error
+    pub fn cancel_all(&self) {
+        let m = self.map.lock().unwrap();
+        for (_k, waiter) in m.iter() {
+            waiter.cancel_wait();
         }
     }
 }
