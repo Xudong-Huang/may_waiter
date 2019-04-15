@@ -11,32 +11,32 @@ use may::sync::{AtomicOption, Blocker};
 mod waiter_map;
 
 // ineternal waiter implementation
-struct Waiter<T> {
+pub struct Waiter<T> {
     blocker: Blocker,
     rsp: AtomicOption<T>,
 }
 
 impl<T> Waiter<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Waiter {
             blocker: Blocker::new(false),
             rsp: AtomicOption::none(),
         }
     }
 
-    fn set_rsp(&self, rsp: T) {
+    pub fn set_rsp(&self, rsp: T) {
         // set the response
         self.rsp.swap(rsp, Ordering::Release);
         // wake up the blocker
         self.blocker.unpark();
     }
 
-    fn cancel_wait(&self) {
+    pub fn cancel_wait(&self) {
         // wake up the blocker without rsp
         self.blocker.unpark()
     }
 
-    fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
+    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         use coroutine::ParkError;
         use io::{Error, ErrorKind};
 
