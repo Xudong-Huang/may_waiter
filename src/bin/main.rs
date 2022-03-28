@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 fn test_waiter_map() {
     let req_map = Arc::new(WaiterMap::<usize, usize>::new());
-    let rmap = req_map.clone();
+    let req_map_1 = req_map.clone();
 
     let key = 1234;
 
@@ -16,7 +16,7 @@ fn test_waiter_map() {
     let waiter = req_map.new_waiter(key);
 
     // trigger the rsp in another coroutine
-    go!(move || rmap.set_rsp(&key, 100).ok());
+    go!(move || req_map_1.set_rsp(&key, 100).ok());
 
     // this will block until the rsp was set
     let result = waiter.wait_rsp(None).unwrap();
