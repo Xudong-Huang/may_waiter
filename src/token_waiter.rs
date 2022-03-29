@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::io;
-use std::pin::Pin;
+use std::marker::PhantomPinned;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -33,6 +33,7 @@ pub struct Error;
 pub struct TokenWaiter<T> {
     waiter: Waiter<T>,
     key: AtomicUsize,
+    _phantom: PhantomPinned,
 }
 
 impl<T> TokenWaiter<T> {
@@ -40,12 +41,13 @@ impl<T> TokenWaiter<T> {
         TokenWaiter {
             key: AtomicUsize::new(0),
             waiter: Waiter::new(),
+            _phantom: PhantomPinned,
         }
     }
 
     /// get the id of this token_waiter
     /// if the waiter is not triggered, we can't get id again
-    pub fn id(self: Pin<&Self>) -> Result<ID, Error> {
+    pub fn id(&self) -> Result<ID, Error> {
         let id = self.key.load(Ordering::Relaxed);
         if id != 0 {
             // the id is already initialized
@@ -53,7 +55,7 @@ impl<T> TokenWaiter<T> {
         }
 
         // pin address is never changed
-        let address = self.get_ref() as *const _ as usize;
+        let address = self as *const _ as usize;
         let tag = TAG.with(|t| {
             let x = t.get();
             t.set(x + 1);
@@ -66,12 +68,12 @@ impl<T> TokenWaiter<T> {
     }
 
     // make sure the id valid one from get id
-    fn from_id(id: &ID) -> Option<Pin<&Self>> {
+    fn from_id(id: &ID) -> Option<&Self> {
         let id = id.0;
         // TODO: how to check if the address is valid?
         // if the id is wrong enough we could get a SIGSEGV
         let address = (id >> 3) & !0x7;
-        let waiter = unsafe { Pin::new_unchecked(&*(address as *const Self)) };
+        let waiter = unsafe { &*(address as *const Self) };
         // need to check if the memory is still valid
         // lock the key to protect contention with drop
         if waiter
@@ -136,7 +138,6 @@ mod tests {
     #[test]
     fn token_waiter_id() {
         let waiter = TokenWaiter::<usize>::new();
-        let waiter = Pin::new(&waiter);
         assert!(waiter.id().is_ok());
         // the previous id should be consumed
         assert!(waiter.id().is_err());
@@ -147,7 +148,6 @@ mod tests {
         for j in 0..100 {
             let result = go!(move || {
                 let waiter = TokenWaiter::<usize>::new();
-                let waiter = Pin::new(&waiter);
                 let id = waiter.id().unwrap();
                 // trigger the rsp in another coroutine
                 go!(move || TokenWaiter::set_rsp(id, j + 100));
@@ -169,7 +169,7 @@ mod tests {
     fn token_waiter_timeout() {
         let result = go!(|| {
             let waiter = TokenWaiter::<usize>::new();
-            let id = Pin::new(&waiter).id().unwrap();
+            let id = waiter.id().unwrap();
             // trigger the rsp in another coroutine
             let h = go!(move || {
                 may::coroutine::sleep(Duration::from_millis(102));

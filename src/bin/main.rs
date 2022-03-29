@@ -4,7 +4,6 @@ extern crate may;
 
 use may_waiter::{TokenWaiter, WaiterMap};
 
-use std::pin::Pin;
 use std::sync::Arc;
 
 fn test_waiter_map() {
@@ -29,7 +28,6 @@ fn test_token_waiter() {
     for j in 0..100 {
         let result = go!(move || {
             let waiter = TokenWaiter::<usize>::new();
-            let waiter = Pin::new(&waiter);
             let id = waiter.id().unwrap();
             // trigger the rsp in another coroutine
             go!(move || TokenWaiter::set_rsp(id, j + 100));
