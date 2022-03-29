@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{fmt, io};
 
-/// internal waiter implementation
+/// Generic Waiter that could wait for a response
 pub(crate) struct Waiter<T> {
     blocker: Blocker,
     rsp: AtomicOption<Box<T>>,

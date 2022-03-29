@@ -108,6 +108,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use may::go;
 
     #[test]
     fn test_waiter_map() {

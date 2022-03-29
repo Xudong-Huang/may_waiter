@@ -2,7 +2,9 @@ extern crate may_waiter;
 #[macro_use]
 extern crate may;
 
-use may_waiter::WaiterMap;
+use may_waiter::{TokenWaiter, WaiterMap};
+
+use std::pin::Pin;
 use std::sync::Arc;
 
 fn test_waiter_map() {
@@ -23,6 +25,29 @@ fn test_waiter_map() {
     assert_eq!(result, 100);
 }
 
+fn test_token_waiter() {
+    for j in 0..100 {
+        let result = go!(move || {
+            let waiter = TokenWaiter::<usize>::new();
+            let waiter = Pin::new(&waiter);
+            let id = waiter.id().unwrap();
+            // trigger the rsp in another coroutine
+            go!(move || TokenWaiter::set_rsp(id, j + 100));
+            // this will block until the rsp was set
+            assert_eq!(waiter.wait_rsp(None).unwrap(), j + 100);
+            // after wait we can get the id again
+            let id = waiter.id().unwrap();
+            go!(move || TokenWaiter::set_rsp(id, j));
+            waiter.wait_rsp(std::time::Duration::from_secs(2)).unwrap()
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(result, j);
+    }
+}
+
 fn main() {
     test_waiter_map();
+    test_token_waiter();
 }
