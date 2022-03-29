@@ -13,6 +13,18 @@ thread_local! {static TAG: Cell<usize> = Cell::new(0);}
 #[derive(Debug)]
 pub struct ID(usize);
 
+impl From<usize> for ID {
+    fn from(id: usize) -> Self {
+        ID(id)
+    }
+}
+
+impl From<ID> for usize {
+    fn from(id: ID) -> Self {
+        id.0
+    }
+}
+
 /// get id error
 #[derive(Debug)]
 pub struct Error;
