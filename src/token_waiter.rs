@@ -13,8 +13,13 @@ thread_local! {static TAG: Cell<usize> = Cell::new(0);}
 #[derive(Debug)]
 pub struct ID(usize);
 
-impl From<usize> for ID {
-    fn from(id: usize) -> Self {
+impl ID {
+    /// construct `ID` from `usize`
+    ///
+    /// # Safety
+    ///
+    /// the usize must be come from the previous `ID` instance
+    pub unsafe fn from_usize(id: usize) -> Self {
         ID(id)
     }
 }
