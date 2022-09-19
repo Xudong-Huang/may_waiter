@@ -47,9 +47,6 @@ impl<K: Hash + Eq, T> Default for WaiterMap<K, T> {
     }
 }
 
-unsafe impl<K, T> Send for WaiterMap<K, T> {}
-unsafe impl<K, T> Sync for WaiterMap<K, T> {}
-
 impl<K: Hash + Eq, T> WaiterMap<K, T> {
     pub fn new() -> Self {
         WaiterMap {
