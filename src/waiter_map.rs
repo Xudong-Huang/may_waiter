@@ -1,7 +1,8 @@
-use dashmap::DashMap;
+use may::sync::Mutex;
 
 use crate::waiter::Waiter;
 
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::io;
@@ -30,7 +31,8 @@ impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
 
 /// Waiter map that could be used to wait response for given keys
 pub struct WaiterMap<K, T> {
-    map: DashMap<K, Waiter<T>>,
+    // TODO: use atomic hashmap instead
+    map: Mutex<HashMap<K, Box<Waiter<T>>>>,
 }
 
 impl<K: Hash + Eq, T> Debug for WaiterMap<K, T> {
@@ -45,10 +47,13 @@ impl<K: Hash + Eq, T> Default for WaiterMap<K, T> {
     }
 }
 
+unsafe impl<K, T> Send for WaiterMap<K, T> {}
+unsafe impl<K, T> Sync for WaiterMap<K, T> {}
+
 impl<K: Hash + Eq, T> WaiterMap<K, T> {
     pub fn new() -> Self {
         WaiterMap {
-            map: DashMap::new(),
+            map: Mutex::new(HashMap::new()),
         }
     }
 
@@ -57,15 +62,16 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     where
         K: Clone,
     {
+        let mut m = self.map.lock().unwrap();
         // if we add a same key, the old waiter would be lost!
-        match self.map.insert(id.clone(), Waiter::new()) {
-            Some(_w) => panic!("waiter id already in use!"),
-            None => WaiterGuard { owner: self, id },
-        }
+        m.insert(id.clone(), Box::new(Waiter::new()));
+        WaiterGuard { owner: self, id }
     }
 
-    fn del_waiter(&self, id: &K) -> Option<Waiter<T>> {
-        self.map.remove(id).map(|v| v.1)
+    // used internally
+    fn del_waiter(&self, id: &K) -> Option<Box<Waiter<T>>> {
+        let mut m = self.map.lock().unwrap();
+        m.remove(id)
     }
 
     fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T>
@@ -76,11 +82,15 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
             unsafe { ::std::mem::transmute(r) }
         }
 
-        let waiter = match self.map.get(id) {
+        let map = self.map.lock().unwrap();
+        let waiter = match map.get(id) {
             // extends the lifetime of the waiter ref
-            Some(v) => extend_lifetime(&*v),
+            Some(v) => extend_lifetime(v.as_ref()),
             None => unreachable!("can't find id in waiter map!"),
         };
+
+        //release the mutex
+        drop(map);
 
         waiter.wait_rsp(timeout)
     }
@@ -90,7 +100,8 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     where
         K: Debug,
     {
-        match self.map.get(id) {
+        let m = self.map.lock().unwrap();
+        match m.get(id) {
             Some(waiter) => {
                 waiter.set_rsp(rsp);
                 Ok(())
@@ -100,8 +111,11 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     /// cancel all the waiting waiter, all wait would return NotFound error
-    pub fn cancel_all(&mut self) {
-        self.map.iter().for_each(|waiter| waiter.cancel_wait());
+    pub fn cancel_all(&self) {
+        let m = self.map.lock().unwrap();
+        for (_k, waiter) in m.iter() {
+            waiter.cancel_wait();
+        }
     }
 }
 

@@ -1,11 +1,11 @@
+use crate::waiter::Waiter;
+
 use std::cell::Cell;
 use std::fmt;
 use std::io;
 use std::marker::PhantomPinned;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-
-use crate::waiter::Waiter;
 
 thread_local! {static TAG: Cell<usize> = Cell::new(0);}
 
@@ -188,6 +188,6 @@ mod tests {
         .join()
         .unwrap();
 
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
     }
 }

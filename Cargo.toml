@@ -15,4 +15,3 @@ exclude = [".gitignore", ".travis.yml", "appveyor.yml", "benches/**/*"]
 
 [dependencies]
 may = "0.3"
-dashmap = "5"
