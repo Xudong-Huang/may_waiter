@@ -1,7 +1,6 @@
 use may::coroutine;
 use may::sync::{AtomicOption, Blocker};
 
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{fmt, io};
 
@@ -21,7 +20,7 @@ impl<T> Waiter<T> {
 
     pub fn set_rsp(&self, rsp: T) {
         // set the response
-        self.rsp.swap(Box::new(rsp), Ordering::Release);
+        self.rsp.swap(Box::new(rsp));
         // wake up the blocker
         self.blocker.unpark();
     }
@@ -33,7 +32,7 @@ impl<T> Waiter<T> {
         loop {
             match self.blocker.park(timeout) {
                 Ok(_) => {
-                    if let Some(rsp) = self.rsp.take(Ordering::Acquire) {
+                    if let Some(rsp) = self.rsp.take() {
                         return Ok(*rsp);
                         // None => Err(Error::new(ErrorKind::Other, "unable to get the rsp")),
                         // false wake up try again
