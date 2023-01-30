@@ -20,7 +20,7 @@ impl<T> Waiter<T> {
 
     pub fn set_rsp(&self, rsp: T) {
         // set the response
-        self.rsp.swap(Box::new(rsp));
+        self.rsp.store(Box::new(rsp));
         // wake up the blocker
         self.blocker.unpark();
     }
