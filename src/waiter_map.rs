@@ -13,10 +13,15 @@ pub struct MapWaiter<K: Ord, T> {
     id: K,
 }
 
-impl<K: Ord + Debug, T> MapWaiter<K, T> {
+impl<K: Ord, T> MapWaiter<K, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.map.wait_rsp(&self.id, timeout.into())
+    }
+
+    /// set rsp for the waiter
+    pub fn set_rsp(&self, rsp: T) -> Result<(), T> {
+        self.map.set_rsp(&self.id, rsp)
     }
 }
 
@@ -104,10 +109,7 @@ impl<K: Ord, T> WaiterMap<K, T> {
         m.remove(id)
     }
 
-    fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T>
-    where
-        K: Debug,
-    {
+    fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T> {
         fn extend_lifetime<'a, T>(r: &T) -> &'a T {
             unsafe { ::std::mem::transmute(r) }
         }
@@ -126,10 +128,7 @@ impl<K: Ord, T> WaiterMap<K, T> {
     }
 
     /// set rsp for the corresponding waiter
-    pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T>
-    where
-        K: Debug,
-    {
+    pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T> {
         let m = self.map.lock().unwrap();
         match m.get(id) {
             Some(waiter) => {
@@ -178,16 +177,15 @@ mod tests {
     fn test_map_waiter() {
         use std::sync::Arc;
         let req_map = Arc::new(WaiterMap::<usize, usize>::new());
-        let req_map_1 = req_map.clone();
-
         let key = 1234;
 
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = req_map.make_waiter(key);
+        let waiter = Arc::new(req_map.make_waiter(key));
+        let waiter_1 = waiter.clone();
 
         // trigger the rsp in another coroutine
-        go!(move || req_map_1.set_rsp(&key, 100).ok());
+        go!(move || { waiter_1.set_rsp(100).ok() });
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
