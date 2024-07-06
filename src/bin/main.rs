@@ -2,7 +2,7 @@ extern crate may_waiter;
 #[macro_use]
 extern crate may;
 
-use may_waiter::{TokenWaiter, WaiterMap};
+use may_waiter::{MapWaiter, TokenWaiter, WaiterMap};
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ fn test_waiter_map() {
 
     // one coroutine wait data send from another coroutine
     // prepare the waiter first
-    let waiter = req_map.new_waiter(key);
+    let waiter: MapWaiter<_, _> = req_map.make_waiter(key);
 
     // trigger the rsp in another coroutine
     go!(move || req_map_1.set_rsp(&key, 100).ok());
