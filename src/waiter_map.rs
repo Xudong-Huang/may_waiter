@@ -2,27 +2,26 @@ use may::sync::Mutex;
 
 use crate::waiter::Waiter;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
-use std::hash::Hash;
 use std::io;
 use std::time::Duration;
 
 /// Water guard to wait the response
 #[derive(Debug)]
-pub struct WaiterGuard<'a, K: Hash + Eq + 'a, T: 'a> {
+pub struct WaiterGuard<'a, K: Ord + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
     id: K,
 }
 
-impl<'a, K: Hash + Eq + Debug, T> WaiterGuard<'a, K, T> {
+impl<'a, K: Ord + Debug, T> WaiterGuard<'a, K, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(&self.id, timeout.into())
     }
 }
 
-impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
+impl<'a, K: Ord, T> Drop for WaiterGuard<'a, K, T> {
     fn drop(&mut self) {
         // remove the entry
         self.owner.del_waiter(&self.id);
@@ -32,25 +31,25 @@ impl<'a, K: Hash + Eq, T> Drop for WaiterGuard<'a, K, T> {
 /// Waiter map that could be used to wait response for given keys
 pub struct WaiterMap<K, T> {
     // TODO: use atomic hashmap instead
-    map: Mutex<HashMap<K, Box<Waiter<T>>>>,
+    map: Mutex<BTreeMap<K, Box<Waiter<T>>>>,
 }
 
-impl<K: Hash + Eq, T> Debug for WaiterMap<K, T> {
+impl<K: Ord, T> Debug for WaiterMap<K, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "WaiterMap{{ ... }}")
     }
 }
 
-impl<K: Hash + Eq, T> Default for WaiterMap<K, T> {
+impl<K: Ord, T> Default for WaiterMap<K, T> {
     fn default() -> Self {
         WaiterMap::new()
     }
 }
 
-impl<K: Hash + Eq, T> WaiterMap<K, T> {
+impl<K: Ord, T> WaiterMap<K, T> {
     pub fn new() -> Self {
         WaiterMap {
-            map: Mutex::new(HashMap::new()),
+            map: Mutex::new(BTreeMap::new()),
         }
     }
 
