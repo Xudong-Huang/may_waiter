@@ -3,7 +3,6 @@ use may::sync::Mutex;
 use crate::waiter::Waiter;
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Debug};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +38,7 @@ pub struct WaiterGuard<'a, K: Ord + 'a, T: 'a> {
     id: K,
 }
 
-impl<'a, K: Ord + Debug, T> WaiterGuard<'a, K, T> {
+impl<'a, K: Ord, T> WaiterGuard<'a, K, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(&self.id, timeout.into())
@@ -59,8 +58,8 @@ pub struct WaiterMap<K, T> {
     map: Mutex<BTreeMap<K, Box<Waiter<T>>>>,
 }
 
-impl<K: Ord, T> Debug for WaiterMap<K, T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl<K: Ord, T> std::fmt::Debug for WaiterMap<K, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "WaiterMap{{ ... }}")
     }
 }
