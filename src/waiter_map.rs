@@ -5,7 +5,27 @@ use crate::waiter::Waiter;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
+
+pub struct MapWaiter<K: Ord, T> {
+    map: Arc<WaiterMap<K, T>>,
+    id: K,
+}
+
+impl<K: Ord + Debug, T> MapWaiter<K, T> {
+    /// wait for response
+    pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
+        self.map.wait_rsp(&self.id, timeout.into())
+    }
+}
+
+impl<K: Ord, T> Drop for MapWaiter<K, T> {
+    fn drop(&mut self) {
+        // remove the entry
+        self.map.del_waiter(&self.id);
+    }
+}
 
 /// Water guard to wait the response
 #[derive(Debug)]
@@ -62,6 +82,20 @@ impl<K: Ord, T> WaiterMap<K, T> {
         // if we add a same key, the old waiter would be lost!
         m.insert(id.clone(), Box::new(Waiter::new()));
         WaiterGuard { owner: self, id }
+    }
+
+    /// return a waiter on the stack!
+    pub fn make_waiter(self: &Arc<Self>, id: K) -> MapWaiter<K, T>
+    where
+        K: Clone,
+    {
+        let mut m = self.map.lock().unwrap();
+        // if we add a same key, the old waiter would be lost!
+        m.insert(id.clone(), Box::new(Waiter::new()));
+        MapWaiter {
+            map: self.clone(),
+            id,
+        }
     }
 
     // used internally
@@ -131,6 +165,26 @@ mod tests {
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
         let waiter = req_map.new_waiter(key);
+
+        // trigger the rsp in another coroutine
+        go!(move || req_map_1.set_rsp(&key, 100).ok());
+
+        // this will block until the rsp was set
+        let result = waiter.wait_rsp(None).unwrap();
+        assert_eq!(result, 100);
+    }
+
+    #[test]
+    fn test_map_waiter() {
+        use std::sync::Arc;
+        let req_map = Arc::new(WaiterMap::<usize, usize>::new());
+        let req_map_1 = req_map.clone();
+
+        let key = 1234;
+
+        // one coroutine wait data send from another coroutine
+        // prepare the waiter first
+        let waiter = req_map.make_waiter(key);
 
         // trigger the rsp in another coroutine
         go!(move || req_map_1.set_rsp(&key, 100).ok());
