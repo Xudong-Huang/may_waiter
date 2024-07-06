@@ -4,14 +4,15 @@ use std::cell::Cell;
 use std::fmt;
 use std::io;
 use std::marker::PhantomPinned;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-thread_local! {static TAG: Cell<usize> = Cell::new(0);}
+thread_local! {static TAG: Cell<usize> = const { Cell::new(0) }}
 
 /// the id type from `TokenWaiter::get_id()`
 #[derive(Debug)]
-pub struct ID(usize);
+pub struct ID(NonZeroUsize);
 
 impl ID {
     /// construct `ID` from `usize`
@@ -19,14 +20,14 @@ impl ID {
     /// # Safety
     ///
     /// the usize must be come from the previous `ID` instance
-    pub unsafe fn from_usize(id: usize) -> Self {
+    pub unsafe fn from_usize(id: NonZeroUsize) -> Self {
         ID(id)
     }
 }
 
 impl From<ID> for usize {
     fn from(id: ID) -> Self {
-        id.0
+        id.0.get()
     }
 }
 
@@ -69,12 +70,12 @@ impl<T> TokenWaiter<T> {
 
         let id = (address << 3) | tag;
         self.key.store(id, Ordering::Relaxed);
-        Ok(ID(id))
+        Ok(ID(NonZeroUsize::new(id).unwrap()))
     }
 
     // make sure the id valid one from get id
     fn from_id(id: &ID) -> Option<&Self> {
-        let id = id.0;
+        let id = id.0.get();
         // TODO: how to check if the address is valid?
         // if the id is wrong enough we could get a SIGSEGV
         let address = (id >> 3) & !0x7;
