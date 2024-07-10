@@ -20,8 +20,8 @@ impl ID {
     /// # Safety
     ///
     /// the usize must be come from the previous `ID` instance
-    pub unsafe fn from_usize(id: NonZeroUsize) -> Self {
-        ID(id)
+    pub unsafe fn from_usize(id: usize) -> Self {
+        ID(NonZeroUsize::new(id).expect("id should not be zero"))
     }
 }
 
