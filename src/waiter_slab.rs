@@ -90,7 +90,7 @@ impl<T> WaiterSlab<T> {
     }
 
     /// return a waiter on the stack!
-    pub fn make_waiter(self: &Arc<Self>) -> SlabWaiter<T> {
+    pub fn new_waiter_owned(self: &Arc<Self>) -> SlabWaiter<T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
         SlabWaiter {
             slab: self.clone(),
@@ -151,7 +151,7 @@ mod tests {
 
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = Arc::new(req_map.make_waiter());
+        let waiter = Arc::new(req_map.new_waiter_owned());
         let waiter_1 = waiter.clone();
 
         // trigger the rsp in another coroutine

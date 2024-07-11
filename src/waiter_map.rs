@@ -22,6 +22,11 @@ impl<K: Ord, T> MapWaiter<K, T> {
     pub fn set_rsp(&self, rsp: T) -> Result<(), T> {
         self.map.set_rsp(&self.id, rsp)
     }
+
+    /// get id
+    pub fn id(&self) -> &K {
+        &self.id
+    }
 }
 
 impl<K: Ord, T> Drop for MapWaiter<K, T> {
@@ -89,7 +94,7 @@ impl<K: Ord, T> WaiterMap<K, T> {
     }
 
     /// return a waiter on the stack!
-    pub fn make_waiter(self: &Arc<Self>, id: K) -> MapWaiter<K, T>
+    pub fn new_waiter_owned(self: &Arc<Self>, id: K) -> MapWaiter<K, T>
     where
         K: Clone,
     {
@@ -180,7 +185,7 @@ mod tests {
 
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = Arc::new(req_map.make_waiter(key));
+        let waiter = Arc::new(req_map.new_waiter_owned(key));
         let waiter_1 = waiter.clone();
 
         // trigger the rsp in another coroutine
