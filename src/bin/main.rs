@@ -25,16 +25,16 @@ fn test_waiter_map() {
 }
 
 fn test_waiter_slab() {
-    let req_map = Arc::new(WaiterSlab::<usize>::new());
-    let req_map_1 = req_map.clone();
+    let req_slab = Arc::new(WaiterSlab::<usize>::new());
+    let req_slab_1 = req_slab.clone();
 
     // one coroutine wait data send from another coroutine
     // prepare the waiter first
-    let waiter: SlabWaiter<_> = req_map.new_waiter_owned();
+    let waiter: SlabWaiter<_> = req_slab.new_waiter_owned();
     let id = waiter.id();
 
     // trigger the rsp in another coroutine
-    go!(move || req_map_1.set_rsp(id, 100).ok());
+    go!(move || req_slab_1.set_rsp(id, 100).ok());
 
     // this will block until the rsp was set
     let result = waiter.wait_rsp(None).unwrap();

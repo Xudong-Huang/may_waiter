@@ -61,7 +61,8 @@ impl<'a, T> Drop for SlabWaiterGuard<'a, T> {
     }
 }
 
-/// Waiter map that could be used to wait response for given keys
+/// Waiter slab that could be used to wait response for given keys
+/// Note: usually you could use Arc<Waiter> directly
 pub struct WaiterSlab<T> {
     slab: Slab<Waiter<T>>,
 }
@@ -128,16 +129,16 @@ mod tests {
     #[test]
     fn test_waiter_slab() {
         use std::sync::Arc;
-        let req_map = Arc::new(WaiterSlab::<usize>::new());
-        let req_map_1 = req_map.clone();
+        let req_slab = Arc::new(WaiterSlab::<usize>::new());
+        let req_slab_1 = req_slab.clone();
 
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = req_map.new_waiter();
+        let waiter = req_slab.new_waiter();
         let id = waiter.id();
 
         // trigger the rsp in another coroutine
-        go!(move || req_map_1.set_rsp(id, 100).ok());
+        go!(move || req_slab_1.set_rsp(id, 100).ok());
 
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
@@ -147,11 +148,11 @@ mod tests {
     #[test]
     fn test_slab_waiter() {
         use std::sync::Arc;
-        let req_map = Arc::new(WaiterSlab::<usize>::new());
+        let req_slab = Arc::new(WaiterSlab::<usize>::new());
 
         // one coroutine wait data send from another coroutine
         // prepare the waiter first
-        let waiter = Arc::new(req_map.new_waiter_owned());
+        let waiter = Arc::new(req_slab.new_waiter_owned());
         let waiter_1 = waiter.clone();
 
         // trigger the rsp in another coroutine
