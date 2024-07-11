@@ -14,5 +14,6 @@ categories = ["concurrency"]
 exclude = [".gitignore", ".travis.yml", "appveyor.yml", "benches/**/*"]
 
 [dependencies]
-may = "0.3.32"
+may = "0.3"
+sharded-slab = "0.1"
 
