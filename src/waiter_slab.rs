@@ -6,12 +6,12 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct SlabWaiter<T> {
+pub struct SlabWaiterOwned<T> {
     slab: Arc<WaiterSlab<T>>,
     entry: usize,
 }
 
-impl<T> SlabWaiter<T> {
+impl<T> SlabWaiterOwned<T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.slab.wait_rsp(self.entry, timeout.into())
@@ -28,7 +28,7 @@ impl<T> SlabWaiter<T> {
     }
 }
 
-impl<T> Drop for SlabWaiter<T> {
+impl<T> Drop for SlabWaiterOwned<T> {
     fn drop(&mut self) {
         // remove the entry
         self.slab.del_waiter(self.entry);
@@ -37,12 +37,12 @@ impl<T> Drop for SlabWaiter<T> {
 
 /// Water guard to wait the response
 #[derive(Debug)]
-pub struct SlabWaiterGuard<'a, T: 'a> {
+pub struct SlabWaiter<'a, T: 'a> {
     owner: &'a WaiterSlab<T>,
     entry: usize,
 }
 
-impl<'a, T> SlabWaiterGuard<'a, T> {
+impl<'a, T> SlabWaiter<'a, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(self.entry, timeout.into())
@@ -54,7 +54,7 @@ impl<'a, T> SlabWaiterGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for SlabWaiterGuard<'a, T> {
+impl<'a, T> Drop for SlabWaiter<'a, T> {
     fn drop(&mut self) {
         // remove the entry
         self.owner.del_waiter(self.entry);
@@ -85,15 +85,15 @@ impl<T> WaiterSlab<T> {
     }
 
     /// return a waiter on the stack!
-    pub fn new_waiter(&self) -> SlabWaiterGuard<T> {
+    pub fn new_waiter(&self) -> SlabWaiter<T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
-        SlabWaiterGuard { owner: self, entry }
+        SlabWaiter { owner: self, entry }
     }
 
     /// return a waiter on the stack!
-    pub fn new_waiter_owned(self: &Arc<Self>) -> SlabWaiter<T> {
+    pub fn new_waiter_owned(self: &Arc<Self>) -> SlabWaiterOwned<T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
-        SlabWaiter {
+        SlabWaiterOwned {
             slab: self.clone(),
             entry,
         }
