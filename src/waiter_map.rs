@@ -43,14 +43,14 @@ pub struct MapWaiter<'a, K: Hash + Eq + 'a, T: 'a> {
     id: K,
 }
 
-impl<'a, K: Hash + Eq, T> MapWaiter<'a, K, T> {
+impl<K: Hash + Eq, T> MapWaiter<'_, K, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(&self.id, timeout.into())
     }
 }
 
-impl<'a, K: Hash + Eq, T> Drop for MapWaiter<'a, K, T> {
+impl<K: Hash + Eq, T> Drop for MapWaiter<'_, K, T> {
     fn drop(&mut self) {
         // remove the entry
         self.owner.del_waiter(&self.id);

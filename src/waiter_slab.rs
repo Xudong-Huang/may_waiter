@@ -42,7 +42,7 @@ pub struct SlabWaiter<'a, T: 'a> {
     entry: usize,
 }
 
-impl<'a, T> SlabWaiter<'a, T> {
+impl<T> SlabWaiter<'_, T> {
     /// wait for response
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.owner.wait_rsp(self.entry, timeout.into())
@@ -54,7 +54,7 @@ impl<'a, T> SlabWaiter<'a, T> {
     }
 }
 
-impl<'a, T> Drop for SlabWaiter<'a, T> {
+impl<T> Drop for SlabWaiter<'_, T> {
     fn drop(&mut self) {
         // remove the entry
         self.owner.del_waiter(self.entry);
