@@ -1,4 +1,4 @@
-use scc::HashMap;
+use dashmap::DashMap as HashMap;
 
 use crate::waiter::Waiter;
 
@@ -90,7 +90,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         if self
             .map
             .insert(id.clone(), Box::new(Waiter::new()))
-            .is_err()
+            .is_some()
         {
             panic!("key already exists in the map!")
         };
@@ -106,7 +106,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         if self
             .map
             .insert(id.clone(), Box::new(Waiter::new()))
-            .is_err()
+            .is_some()
         {
             panic!("key already exists in the map!")
         };
@@ -148,7 +148,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 
     /// cancel all the waiting waiter, all wait would return NotFound error
     pub fn cancel_all(&self) {
-        self.map.scan(|_k, waiter| {
+        self.map.iter().for_each(|waiter| {
             waiter.cancel_wait();
         });
     }

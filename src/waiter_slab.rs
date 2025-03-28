@@ -35,7 +35,7 @@ impl<T> Drop for SlabWaiterOwned<T> {
     }
 }
 
-/// Water guard to wait the response
+/// Waiter guard to wait the response
 #[derive(Debug)]
 pub struct SlabWaiter<'a, T: 'a> {
     owner: &'a WaiterSlab<T>,
