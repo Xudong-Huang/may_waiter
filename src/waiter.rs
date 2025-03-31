@@ -31,14 +31,10 @@ impl<T> Waiter<T> {
         let timeout = timeout.into();
         loop {
             match self.blocker.park(timeout) {
-                Ok(_) => {
-                    if let Some(rsp) = self.rsp.take() {
-                        return Ok(*rsp);
-                        // None => Err(Error::new(ErrorKind::Other, "unable to get the rsp")),
-                        // false wake up try again
-                        // None => {}
-                    }
-                }
+                Ok(_) => match self.rsp.take() {
+                    Some(rsp) => return Ok(*rsp),
+                    None => unreachable!("unable to get the rsp"),
+                },
                 Err(ParkError::Timeout) => {
                     return Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
                 }

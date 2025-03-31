@@ -97,7 +97,9 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         MapWaiter { owner: self, id }
     }
 
-    /// return a waiter on the stack!
+    /// return an owned waiter
+    /// don't pass the waiter from thread context to coroutine context
+    /// or the waiter would block the coroutine runtime!
     pub fn new_waiter_owned(self: &Arc<Self>, id: K) -> MapWaiterOwned<K, T>
     where
         K: Clone,
@@ -152,6 +154,14 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
             waiter.cancel_wait();
         });
     }
+
+    /// for each waiter in the map execute the function
+    /// this is used to notify all waiters
+    pub fn for_each(&self, f: impl Fn(&K, &Box<Waiter<T>>)) {
+        self.map.scan(|k, v| {
+            f(k, v);
+        });
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +206,23 @@ mod tests {
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
         assert_eq!(result, 100);
+    }
+
+    #[test]
+    fn test_cancel_all() {
+        use std::sync::Arc;
+        let req_map = Arc::new(WaiterMap::<usize, usize>::new());
+        let req_map_1 = req_map.clone();
+        let key = 1234;
+
+        let j = go!(move || {
+            let waiter = req_map_1.new_waiter(key);
+            let _ = waiter.wait_rsp(None);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        req_map.cancel_all();
+        unsafe { j.coroutine().cancel() };
+        assert!(j.join().is_err());
     }
 }

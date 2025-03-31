@@ -90,7 +90,7 @@ impl<T> WaiterSlab<T> {
         SlabWaiter { owner: self, entry }
     }
 
-    /// return a waiter on the stack!
+    /// return an owned waiter
     pub fn new_waiter_owned(self: &Arc<Self>) -> SlabWaiterOwned<T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
         SlabWaiterOwned {
