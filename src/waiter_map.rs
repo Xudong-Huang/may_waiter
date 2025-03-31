@@ -1,4 +1,4 @@
-use dashmap::DashMap as HashMap;
+use scc::HashMap;
 
 use crate::waiter::Waiter;
 
@@ -36,7 +36,7 @@ impl<K: Hash + Eq, T> Drop for MapWaiterOwned<K, T> {
     }
 }
 
-/// Water guard to wait the response
+/// Waiter guard to wait the response
 #[derive(Debug)]
 pub struct MapWaiter<'a, K: Hash + Eq + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
@@ -90,7 +90,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         if self
             .map
             .insert(id.clone(), Box::new(Waiter::new()))
-            .is_some()
+            .is_err()
         {
             panic!("key already exists in the map!")
         };
@@ -106,7 +106,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         if self
             .map
             .insert(id.clone(), Box::new(Waiter::new()))
-            .is_some()
+            .is_err()
         {
             panic!("key already exists in the map!")
         };
@@ -148,7 +148,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 
     /// cancel all the waiting waiter, all wait would return NotFound error
     pub fn cancel_all(&self) {
-        self.map.iter().for_each(|waiter| {
+        self.map.scan(|_k, waiter| {
             waiter.cancel_wait();
         });
     }
