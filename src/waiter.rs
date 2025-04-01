@@ -29,18 +29,14 @@ impl<T> Waiter<T> {
         use may::coroutine::ParkError;
         use std::io::{Error, ErrorKind};
         let timeout = timeout.into();
-        loop {
-            match self.blocker.park(timeout) {
-                Ok(_) => match self.rsp.take() {
-                    Some(rsp) => return Ok(*rsp),
-                    None => unreachable!("unable to get the rsp"),
-                },
-                Err(ParkError::Timeout) => {
-                    return Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout"))
-                }
-                Err(ParkError::Canceled) => {
-                    coroutine::trigger_cancel_panic();
-                }
+        match self.blocker.park(timeout) {
+            Ok(_) => match self.rsp.take() {
+                Some(rsp) => Ok(*rsp),
+                None => unreachable!("unable to get the rsp"),
+            },
+            Err(ParkError::Timeout) => Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout")),
+            Err(ParkError::Canceled) => {
+                coroutine::trigger_cancel_panic();
             }
         }
     }
