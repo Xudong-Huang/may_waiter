@@ -82,7 +82,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     }
 
     /// return a waiter on the stack!
-    pub fn new_waiter(&self, id: K) -> MapWaiter<K, T>
+    pub fn new_waiter(&self, id: K) -> MapWaiter<'_, K, T>
     where
         K: Clone,
     {
