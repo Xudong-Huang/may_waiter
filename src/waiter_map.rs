@@ -1,4 +1,5 @@
 use dashmap::DashMap as HashMap;
+use dashmap::Entry;
 
 use crate::waiter::Waiter;
 
@@ -59,7 +60,7 @@ impl<K: Hash + Eq, T> Drop for MapWaiter<'_, K, T> {
 
 /// Waiter map that could be used to wait response for given keys
 pub struct WaiterMap<K, T> {
-    map: HashMap<K, Box<Waiter<T>>>,
+    map: HashMap<K, Arc<Waiter<T>>>,
 }
 
 impl<K: Hash + Eq, T> std::fmt::Debug for WaiterMap<K, T> {
@@ -86,14 +87,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     where
         K: Clone,
     {
-        // if we add a same key, the old waiter would be lost!
-        if self
-            .map
-            .insert(id.clone(), Box::new(Waiter::new()))
-            .is_some()
-        {
-            panic!("key already exists in the map!")
-        };
+        self.insert_waiter(id.clone());
         MapWaiter { owner: self, id }
     }
 
@@ -104,36 +98,48 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
     where
         K: Clone,
     {
-        // if we add a same key, the old waiter would be lost!
-        if self
-            .map
-            .insert(id.clone(), Box::new(Waiter::new()))
-            .is_some()
-        {
-            panic!("key already exists in the map!")
-        };
+        self.insert_waiter(id.clone());
         MapWaiterOwned {
             map: self.clone(),
             id,
         }
     }
 
+    // insert a new waiter for the key, panic if the key already exists
+    fn insert_waiter(&self, id: K) {
+        // `entry` acquires the shard's write lock and holds it inside the
+        // returned `Entry`, so the occupancy check and the insert are atomic:
+        // threads inserting the same key serialize on that lock. Since
+        // `K: Hash + Eq`, equal keys always map to the same shard, so the
+        // loser of the race observes `Occupied` and panics instead of
+        // overwriting the winner's waiter.
+        match self.map.entry(id) {
+            // panic without touching the existing entry, so that a waiter
+            // already waiting on this key would not be lost
+            Entry::Occupied(_) => panic!("key already exists in the map!"),
+            Entry::Vacant(entry) => {
+                // the returned `RefMut` is dropped right away, releasing the
+                // shard lock before this function returns
+                entry.insert(Arc::new(Waiter::new()));
+            }
+        }
+    }
+
     // used internally
-    fn del_waiter(&self, id: &K) -> Option<(K, Box<Waiter<T>>)> {
+    fn del_waiter(&self, id: &K) -> Option<(K, Arc<Waiter<T>>)> {
         self.map.remove(id)
     }
 
     fn wait_rsp(&self, id: &K, timeout: Option<Duration>) -> io::Result<T> {
-        fn extend_lifetime<'a, T>(r: &T) -> &'a T {
-            unsafe { ::std::mem::transmute(r) }
-        }
-
+        // clone the waiter out so that the shard read lock is released before
+        // blocking below. Holding the `Ref` across `wait_rsp` would keep the
+        // lock for the whole wait, and since dashmap's shard lock is
+        // writer-biased, a pending writer (e.g. another `new_waiter`/`drop` on
+        // the same shard) would block a concurrent `set_rsp` forever.
         let waiter = match self.map.get(id) {
-            // extends the lifetime of the waiter ref
-            Some(v) => extend_lifetime(v.as_ref()),
+            Some(waiter) => Arc::clone(waiter.value()),
             None => unreachable!("can't find id in waiter map!"),
         };
-
         waiter.wait_rsp(timeout)
     }
 
@@ -157,7 +163,7 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
 
     /// for each waiter in the map execute the function
     /// this is used to notify all waiters
-    pub fn for_each(&self, f: impl Fn(&K, &Box<Waiter<T>>)) {
+    pub fn for_each(&self, f: impl Fn(&K, &Arc<Waiter<T>>)) {
         self.map.iter().for_each(|waiter| {
             f(waiter.key(), waiter.value());
         });
@@ -206,6 +212,25 @@ mod tests {
         // this will block until the rsp was set
         let result = waiter.wait_rsp(None).unwrap();
         assert_eq!(result, 100);
+    }
+
+    #[test]
+    fn test_duplicate_key() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::Arc;
+
+        let req_map = Arc::new(WaiterMap::<usize, usize>::new());
+        let waiter = req_map.new_waiter(1234);
+
+        // inserting a duplicate key panics, but the existing entry is untouched
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            req_map.new_waiter(1234);
+        }));
+        assert!(result.is_err());
+
+        // the original waiter is still in the map and can still get its rsp
+        req_map.set_rsp(&1234, 100).unwrap();
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 100);
     }
 
     #[test]
