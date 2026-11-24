@@ -15,7 +15,12 @@ struct Inner<T> {
     waiter: Waiter<T>,
 }
 
-/// the id type from `TokenWaiter::id()`
+/// An id issued by [`TokenWaiter::id`].
+///
+/// The id holds a handle to the waiter's shared state, so it can be sent to
+/// another coroutine or thread and used with [`TokenWaiter::set_rsp`] even
+/// after the owning [`TokenWaiter`] has been dropped. It can be redeemed at
+/// most once; stale ids are rejected rather than delivered.
 pub struct ID<T> {
     inner: Arc<Inner<T>>,
     gen: usize,
@@ -27,16 +32,23 @@ impl<T> fmt::Debug for ID<T> {
     }
 }
 
-/// get id error
+/// The waiter could not issue a new id because the previous id has not been
+/// consumed by [`TokenWaiter::set_rsp`] yet.
 #[derive(Debug)]
 pub struct Error;
 
-/// token waiter that could be used for primitive wait blocking
+/// A token based waiter that needs no shared map or slab.
+///
+/// The waiter stays with its owner (on the stack, in a `Box`, ...), while a
+/// lightweight [`ID`] is handed to whoever produces the response. Only one id
+/// may be outstanding at a time; once [`TokenWaiter::set_rsp`] accepts a
+/// response, a new id can be requested for the next round.
 pub struct TokenWaiter<T> {
     inner: Arc<Inner<T>>,
 }
 
 impl<T> TokenWaiter<T> {
+    /// Create a new token waiter.
     pub fn new() -> Self {
         TokenWaiter {
             inner: Arc::new(Inner {
@@ -47,8 +59,12 @@ impl<T> TokenWaiter<T> {
         }
     }
 
-    /// get the id of this token_waiter
-    /// if the waiter is not triggered, we can't get id again
+    /// Issue an id for this waiter.
+    ///
+    /// Returns [`Error`] if a previously issued id has not been consumed by
+    /// [`TokenWaiter::set_rsp`] yet, since only one id may be outstanding at a
+    /// time. After `set_rsp` accepts the response, a new id can be requested
+    /// again.
     pub fn id(&self) -> Result<ID<T>, Error> {
         let gen = self.next_gen();
         // only one id may be outstanding at a time, 0 means none
@@ -82,14 +98,21 @@ impl<T> TokenWaiter<T> {
         }
     }
 
+    /// Block until the response is set by [`TokenWaiter::set_rsp`].
+    ///
+    /// Returns an error with kind [`io::ErrorKind::TimedOut`] if the timeout
+    /// expires, and triggers the cancellation panic if the coroutine is
+    /// cancelled while waiting.
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         self.inner.waiter.wait_rsp(timeout)
     }
 
-    /// set rsp for the waiter with id
-    /// the `id` must be come from `id()`
+    /// Set the response for the waiter that issued `id`.
     ///
-    /// returns the rsp back if the id has been consumed or is stale
+    /// The response is returned back in `Err` if the id has already been
+    /// consumed, if it has been superseded by a newer id, or if the
+    /// [`TokenWaiter`] itself has been dropped. The responder can thus learn
+    /// that the response was not delivered.
     pub fn set_rsp(id: ID<T>, rsp: T) -> Result<(), T> {
         // the `id` holds one `Arc<Inner>`, if it is the only one left then the
         // `TokenWaiter` has already been dropped and nobody would wait for it

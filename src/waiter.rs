@@ -4,7 +4,11 @@ use may::sync::{AtomicOption, Blocker};
 use std::time::Duration;
 use std::{fmt, io};
 
-/// Generic Waiter that could wait for a response
+/// Generic waiter that blocks the current coroutine (or thread) until a
+/// response is set.
+///
+/// A waiter stores a single response; it should not be waited on by two
+/// places at the same time, since only one of them would receive it.
 pub struct Waiter<T> {
     blocker: Blocker,
     rsp: AtomicOption<T>,
@@ -18,6 +22,7 @@ impl<T> Waiter<T> {
         }
     }
 
+    /// Store the response and wake up the blocked waiter.
     pub fn set_rsp(&self, rsp: T) {
         // set the response
         self.rsp.store(rsp);
@@ -25,6 +30,11 @@ impl<T> Waiter<T> {
         self.blocker.unpark();
     }
 
+    /// Block until a response is set.
+    ///
+    /// Returns an error with kind [`io::ErrorKind::TimedOut`] if the timeout
+    /// expires. If the coroutine is cancelled while waiting, the cancellation
+    /// panic is triggered.
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
         use may::coroutine::ParkError;
         use std::io::{Error, ErrorKind};
@@ -41,6 +51,10 @@ impl<T> Waiter<T> {
         }
     }
 
+    /// Wake up the blocked waiter without storing a response.
+    ///
+    /// Note: `wait_rsp` panics if it wakes up without a response, so cancelling
+    /// waiters this way leaves their coroutines hitting that panic.
     pub fn cancel_wait(&self) {
         // wake up the blocker without rsp
         self.blocker.unpark()

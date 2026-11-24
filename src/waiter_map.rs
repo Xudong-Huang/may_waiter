@@ -8,6 +8,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Owned waiter guard. Removes the entry from the map on drop.
 pub struct MapWaiterOwned<K: Hash + Eq, T> {
     map: Arc<WaiterMap<K, T>>,
     id: K,
@@ -37,7 +38,7 @@ impl<K: Hash + Eq, T> Drop for MapWaiterOwned<K, T> {
     }
 }
 
-/// Waiter guard to wait the response
+/// Borrowed waiter guard. Removes the entry from the map on drop.
 #[derive(Debug)]
 pub struct MapWaiter<'a, K: Hash + Eq + 'a, T: 'a> {
     owner: &'a WaiterMap<K, T>,
@@ -58,7 +59,12 @@ impl<K: Hash + Eq, T> Drop for MapWaiter<'_, K, T> {
     }
 }
 
-/// Waiter map that could be used to wait response for given keys
+/// A concurrent map from keys to waiters.
+///
+/// Waiting on an entry does not hold the map's shard lock: `wait_rsp` clones
+/// the waiter out of the map before blocking, so other operations on the same
+/// shard (including `set_rsp` and the removal of entries) are never blocked
+/// behind a waiting coroutine.
 pub struct WaiterMap<K, T> {
     map: HashMap<K, Arc<Waiter<T>>>,
 }
@@ -82,7 +88,13 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         }
     }
 
-    /// return a waiter on the stack!
+    /// Create a waiter for `id` and return a guard that removes the entry on
+    /// drop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key already exists in the map. The existing entry is
+    /// left untouched in that case.
     pub fn new_waiter(&self, id: K) -> MapWaiter<'_, K, T>
     where
         K: Clone,
@@ -91,9 +103,16 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         MapWaiter { owner: self, id }
     }
 
-    /// return an owned waiter
-    /// don't pass the waiter from thread context to coroutine context
-    /// or the waiter would block the coroutine runtime!
+    /// Create an owned waiter for `id`.
+    ///
+    /// The guard removes the entry on drop. If this is called outside a
+    /// coroutine, the waiter's blocker is thread based, so calling
+    /// `wait_rsp` from coroutine context would block the runtime thread; keep
+    /// such a waiter in thread context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key already exists in the map.
     pub fn new_waiter_owned(self: &Arc<Self>, id: K) -> MapWaiterOwned<K, T>
     where
         K: Clone,
@@ -143,7 +162,10 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         waiter.wait_rsp(timeout)
     }
 
-    /// set rsp for the corresponding waiter
+    /// Set the response for the waiter associated with `id`.
+    ///
+    /// Returns the response back in `Err` if there is no waiter for the key,
+    /// e.g. because the waiter has already been dropped.
     pub fn set_rsp(&self, id: &K, rsp: T) -> Result<(), T> {
         match self.map.get(id) {
             Some(waiter) => {
@@ -154,15 +176,21 @@ impl<K: Hash + Eq, T> WaiterMap<K, T> {
         }
     }
 
-    /// cancel all the waiting waiter, all wait would return NotFound error
+    /// Wake up all the waiting waiters without storing a response.
+    ///
+    /// Note: `Waiter::wait_rsp` panics when it wakes up without a response, so
+    /// the woken coroutines will hit that panic unless they are cancelled as
+    /// well.
     pub fn cancel_all(&self) {
         self.map.iter().for_each(|waiter| {
             waiter.cancel_wait();
         });
     }
 
-    /// for each waiter in the map execute the function
-    /// this is used to notify all waiters
+    /// Execute the function for each waiter in the map.
+    ///
+    /// The callback runs while the map's shard read locks are held, so it must
+    /// not touch this map (or block) inside the callback.
     pub fn for_each(&self, f: impl Fn(&K, &Arc<Waiter<T>>)) {
         self.map.iter().for_each(|waiter| {
             f(waiter.key(), waiter.value());

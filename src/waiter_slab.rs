@@ -6,6 +6,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Owned waiter guard. Removes the slab entry on drop.
 pub struct SlabWaiterOwned<T> {
     slab: Arc<WaiterSlab<T>>,
     entry: usize,
@@ -22,7 +23,8 @@ impl<T> SlabWaiterOwned<T> {
         self.slab.set_rsp(self.entry, rsp)
     }
 
-    /// get the id
+    /// Get the slab id, e.g. to hand it to the coroutine that produces the
+    /// response.
     pub fn id(&self) -> usize {
         self.entry
     }
@@ -35,7 +37,7 @@ impl<T> Drop for SlabWaiterOwned<T> {
     }
 }
 
-/// Waiter guard to wait the response
+/// Borrowed waiter guard. Removes the slab entry on drop.
 #[derive(Debug)]
 pub struct SlabWaiter<'a, T: 'a> {
     owner: &'a WaiterSlab<T>,
@@ -48,7 +50,8 @@ impl<T> SlabWaiter<'_, T> {
         self.owner.wait_rsp(self.entry, timeout.into())
     }
 
-    /// get the id
+    /// Get the slab id, e.g. to hand it to the coroutine that produces the
+    /// response.
     pub fn id(&self) -> usize {
         self.entry
     }
@@ -61,8 +64,14 @@ impl<T> Drop for SlabWaiter<'_, T> {
     }
 }
 
-/// Waiter slab that could be used to wait response for given keys
-/// Note: usually you could use Arc<Waiter> directly
+/// A concurrent slab of waiters addressed by slab ids.
+///
+/// Slab ids carry a generation check, so a stale id (one whose waiter has been
+/// removed) never resolves to a recycled slot: `set_rsp` returns the response
+/// back in `Err` instead. Waiting does not hold a lock; `Slab::get` uses a
+/// lock-free, ref-counted guard.
+///
+/// Note: usually you can use `Arc<Waiter>` directly.
 pub struct WaiterSlab<T> {
     slab: Slab<Waiter<T>>,
 }
@@ -84,13 +93,16 @@ impl<T> WaiterSlab<T> {
         WaiterSlab { slab: Slab::new() }
     }
 
-    /// return a waiter on the stack!
+    /// Create a waiter and return a guard that removes the entry on drop.
     pub fn new_waiter(&self) -> SlabWaiter<'_, T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
         SlabWaiter { owner: self, entry }
     }
 
-    /// return an owned waiter
+    /// Create an owned waiter. The guard removes the entry on drop.
+    ///
+    /// As with `WaiterMap::new_waiter_owned`, a waiter created outside a
+    /// coroutine must not be waited on from coroutine context.
     pub fn new_waiter_owned(self: &Arc<Self>) -> SlabWaiterOwned<T> {
         let entry = self.slab.insert(Waiter::new()).expect("no slot available");
         SlabWaiterOwned {
@@ -105,11 +117,16 @@ impl<T> WaiterSlab<T> {
     }
 
     fn wait_rsp(&self, id: usize, timeout: Option<Duration>) -> io::Result<T> {
+        // `Slab::get` returns a lock-free, ref-counted guard, so holding it
+        // across the wait does not block insert/remove/set_rsp operations
         let waiter = self.slab.get(id).expect("can't find id in waiter slab");
         waiter.wait_rsp(timeout)
     }
 
-    /// set rsp for the corresponding waiter
+    /// Set the response for the waiter associated with `id`.
+    ///
+    /// Returns the response back in `Err` if the slab has no waiter for the
+    /// id, e.g. because the waiter has already been dropped.
     pub fn set_rsp(&self, id: usize, rsp: T) -> Result<(), T> {
         match self.slab.get(id) {
             Some(waiter) => {
