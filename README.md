@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/Xudong-Huang/may_waiter.svg?branch=master)](https://travis-ci.org/Xudong-Huang/may_waiter)
+[![CI](https://github.com/Xudong-Huang/may_waiter/actions/workflows/ci.yml/badge.svg)](https://github.com/Xudong-Huang/may_waiter/actions/workflows/ci.yml)
 [![Current Crates.io Version](https://img.shields.io/crates/v/may_waiter.svg)](https://crates.io/crates/may_waiter)
 [![Document](https://img.shields.io/badge/doc-may_waiter-green.svg)](https://docs.rs/may_waiter)
 # coroutine waiter library

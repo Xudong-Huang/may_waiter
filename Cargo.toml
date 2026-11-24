@@ -10,7 +10,7 @@ description = "Simple coroutine communication blocker"
 readme = "README.md"
 keywords = ["coroutine", "multi-thread"]
 categories = ["concurrency"]
-exclude = [".gitignore", ".travis.yml", "appveyor.yml", "benches/**/*"]
+exclude = [".gitignore", ".github/**/*", "benches/**/*"]
 
 [dependencies]
 may = "0.3.52"
