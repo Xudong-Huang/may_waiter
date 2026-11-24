@@ -47,12 +47,12 @@ fn test_token_waiter() {
             let waiter = TokenWaiter::<usize>::new();
             let id = waiter.id().unwrap();
             // trigger the rsp in another coroutine
-            go!(move || TokenWaiter::set_rsp(id, j + 100));
+            go!(move || TokenWaiter::set_rsp(id, j + 100).unwrap());
             // this will block until the rsp was set
             assert_eq!(waiter.wait_rsp(None).unwrap(), j + 100);
             // after wait we can get the id again
             let id = waiter.id().unwrap();
-            go!(move || TokenWaiter::set_rsp(id, j));
+            go!(move || TokenWaiter::set_rsp(id, j).unwrap());
             waiter.wait_rsp(std::time::Duration::from_secs(2)).unwrap()
         })
         .join()

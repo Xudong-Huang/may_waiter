@@ -1,33 +1,29 @@
 use crate::waiter::Waiter;
 
-use std::cell::Cell;
 use std::fmt;
 use std::io;
-use std::marker::PhantomPinned;
-use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-thread_local! {static TAG: Cell<usize> = const { Cell::new(0) }}
-
-/// the id type from `TokenWaiter::get_id()`
-#[derive(Debug)]
-pub struct ID(NonZeroUsize);
-
-impl ID {
-    /// construct `ID` from `usize`
-    ///
-    /// # Safety
-    ///
-    /// the usize must be come from the previous `ID` instance
-    pub unsafe fn from_usize(id: usize) -> Self {
-        ID(NonZeroUsize::new(id).expect("id should not be zero"))
-    }
+/// shared state of a `TokenWaiter`, kept alive by outstanding [`ID`]s
+struct Inner<T> {
+    // 0 if no id is outstanding, otherwise the generation of the id
+    key: AtomicUsize,
+    // source of the id generations, never 0
+    gen: AtomicUsize,
+    waiter: Waiter<T>,
 }
 
-impl From<ID> for usize {
-    fn from(id: ID) -> Self {
-        id.0.get()
+/// the id type from `TokenWaiter::id()`
+pub struct ID<T> {
+    inner: Arc<Inner<T>>,
+    gen: usize,
+}
+
+impl<T> fmt::Debug for ID<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ID{{ gen: {} }}", self.gen)
     }
 }
 
@@ -37,75 +33,82 @@ pub struct Error;
 
 /// token waiter that could be used for primitive wait blocking
 pub struct TokenWaiter<T> {
-    waiter: Waiter<T>,
-    key: AtomicUsize,
-    _phantom: PhantomPinned,
+    inner: Arc<Inner<T>>,
 }
 
 impl<T> TokenWaiter<T> {
     pub fn new() -> Self {
         TokenWaiter {
-            key: AtomicUsize::new(0),
-            waiter: Waiter::new(),
-            _phantom: PhantomPinned,
+            inner: Arc::new(Inner {
+                key: AtomicUsize::new(0),
+                gen: AtomicUsize::new(0),
+                waiter: Waiter::new(),
+            }),
         }
     }
 
     /// get the id of this token_waiter
     /// if the waiter is not triggered, we can't get id again
-    pub fn id(&self) -> Result<ID, Error> {
-        let id = self.key.load(Ordering::Relaxed);
-        if id != 0 {
-            // the id is already initialized
-            return Err(Error);
+    pub fn id(&self) -> Result<ID<T>, Error> {
+        let gen = self.next_gen();
+        // only one id may be outstanding at a time, 0 means none
+        match self
+            .inner
+            .key
+            .compare_exchange(0, gen, Ordering::AcqRel, Ordering::Relaxed)
+        {
+            Ok(_) => Ok(ID {
+                inner: Arc::clone(&self.inner),
+                gen,
+            }),
+            Err(_) => Err(Error),
         }
-
-        // pin address is never changed
-        let address = self as *const _ as usize;
-        let tag = TAG.with(|t| {
-            let x = t.get();
-            t.set(x + 1);
-            (x & 0x1f) << 1
-        });
-
-        let id = (address << 3) | tag;
-        self.key.store(id, Ordering::Relaxed);
-        Ok(ID(NonZeroUsize::new(id).unwrap()))
     }
 
-    // make sure the id valid one from get id
-    fn from_id(id: &ID) -> Option<&Self> {
-        let id = id.0.get();
-        // TODO: how to check if the address is valid?
-        // if the id is wrong enough we could get a SIGSEGV
-        let address = (id >> 3) & !0x7;
-        let waiter = unsafe { &*(address as *const Self) };
-        // need to check if the memory is still valid
-        // lock the key to protect contention with drop
-        if waiter
-            .key
-            .compare_exchange(id, id + 1, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            Some(waiter)
-        } else {
-            None
+    // take a fresh generation, never returning 0 so that 0 can mean "no id"
+    fn next_gen(&self) -> usize {
+        let mut gen = self.inner.gen.load(Ordering::Relaxed);
+        loop {
+            let next = if gen == usize::MAX { 1 } else { gen + 1 };
+            match self.inner.gen.compare_exchange_weak(
+                gen,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return next,
+                Err(actual) => gen = actual,
+            }
         }
     }
 
     pub fn wait_rsp<D: Into<Option<Duration>>>(&self, timeout: D) -> io::Result<T> {
-        self.waiter.wait_rsp(timeout)
+        self.inner.waiter.wait_rsp(timeout)
     }
 
     /// set rsp for the waiter with id
-    /// the `id` must be come from `get_id()`
-    pub fn set_rsp(id: ID, rsp: T) {
-        if let Some(waiter) = Self::from_id(&id) {
-            // clear the id so that we can get the id again
-            waiter.key.store(0, Ordering::Release);
-            // wake up the blocker
-            waiter.waiter.set_rsp(rsp);
+    /// the `id` must be come from `id()`
+    ///
+    /// returns the rsp back if the id has been consumed or is stale
+    pub fn set_rsp(id: ID<T>, rsp: T) -> Result<(), T> {
+        // the `id` holds one `Arc<Inner>`, if it is the only one left then the
+        // `TokenWaiter` has already been dropped and nobody would wait for it
+        if Arc::strong_count(&id.inner) == 1 {
+            return Err(rsp);
         }
+        // claim the outstanding id, a consumed or superseded id would fail
+        if id
+            .inner
+            .key
+            .compare_exchange(id.gen, 0, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(rsp);
+        }
+        // the id is released before delivering the rsp so that `id()` can be
+        // called again right after `wait_rsp` returns
+        id.inner.waiter.set_rsp(rsp);
+        Ok(())
     }
 }
 
@@ -120,21 +123,6 @@ impl<T> Default for TokenWaiter<T> {
         TokenWaiter::new()
     }
 }
-
-// this is not necessary, we safely drop a non triggered token waiter
-// impl<T> Drop for TokenWaiter<T> {
-//     fn drop(&mut self) {
-//         // wait for the key locked and clear it
-//         let mut key = self.key.load(Ordering::Relaxed) & !1;
-//         while let Err(v) =
-//             self.key
-//                 .compare_exchange_weak(key, 0, Ordering::AcqRel, Ordering::Relaxed)
-//         {
-//             key = v;
-//             std::hint::spin_loop()
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -156,12 +144,12 @@ mod tests {
                 let waiter = TokenWaiter::<usize>::new();
                 let id = waiter.id().unwrap();
                 // trigger the rsp in another coroutine
-                go!(move || TokenWaiter::set_rsp(id, j + 100));
+                go!(move || TokenWaiter::set_rsp(id, j + 100).unwrap());
                 // this will block until the rsp was set
                 assert_eq!(waiter.wait_rsp(None).unwrap(), j + 100);
                 // after wait we can get the id again
                 let id = waiter.id().unwrap();
-                go!(move || TokenWaiter::set_rsp(id, j));
+                go!(move || TokenWaiter::set_rsp(id, j).unwrap());
                 waiter.wait_rsp(std::time::Duration::from_secs(2)).unwrap()
             })
             .join()
@@ -179,7 +167,7 @@ mod tests {
             // trigger the rsp in another coroutine
             let h = go!(move || {
                 may::coroutine::sleep(Duration::from_millis(102));
-                TokenWaiter::set_rsp(id, 42)
+                TokenWaiter::set_rsp(id, 42).ok()
             });
             // this will block until the rsp was set
             let ret = waiter.wait_rsp(Duration::from_millis(100));
@@ -190,5 +178,25 @@ mod tests {
         .unwrap();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn token_waiter_stale_id() {
+        let waiter = TokenWaiter::<usize>::new();
+        let id = waiter.id().unwrap();
+        // the waiter may be dropped while an id is still out there,
+        // using the id afterwards must be safe and rejected
+        drop(waiter);
+        assert_eq!(TokenWaiter::set_rsp(id, 42), Err(42));
+    }
+
+    #[test]
+    fn token_waiter_moved() {
+        let waiter = TokenWaiter::<usize>::new();
+        let id = waiter.id().unwrap();
+        // moving the waiter no longer invalidates the id
+        let waiter = Box::new(waiter);
+        go!(move || TokenWaiter::set_rsp(id, 100).unwrap());
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 100);
     }
 }
