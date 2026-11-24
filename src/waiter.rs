@@ -7,7 +7,7 @@ use std::{fmt, io};
 /// Generic Waiter that could wait for a response
 pub struct Waiter<T> {
     blocker: Blocker,
-    rsp: AtomicOption<Box<T>>,
+    rsp: AtomicOption<T>,
 }
 
 impl<T> Waiter<T> {
@@ -20,7 +20,7 @@ impl<T> Waiter<T> {
 
     pub fn set_rsp(&self, rsp: T) {
         // set the response
-        self.rsp.store(Box::new(rsp));
+        self.rsp.store(rsp);
         // wake up the blocker
         self.blocker.unpark();
     }
@@ -31,7 +31,7 @@ impl<T> Waiter<T> {
         let timeout = timeout.into();
         match self.blocker.park(timeout) {
             Ok(_) => match self.rsp.take() {
-                Some(rsp) => Ok(*rsp),
+                Some(rsp) => Ok(rsp),
                 None => unreachable!("unable to get the rsp"),
             },
             Err(ParkError::Timeout) => Err(Error::new(ErrorKind::TimedOut, "wait rsp timeout")),
