@@ -33,7 +33,7 @@ fn test_waiter_map() {
 }
 ```
 
-* the token associated interface is through `TokenWaiter`, which does not need a map
+* the token associated interface is through `TokenWaiter`, which does not need a caller-managed map
 ```rust
 fn test_token_waiter() {
     for j in 0..100 {
@@ -41,12 +41,12 @@ fn test_token_waiter() {
             let waiter = TokenWaiter::<usize>::new();
             let id = waiter.id().unwrap();
             // trigger the rsp in another coroutine
-            go!(move || TokenWaiter::set_rsp(id, j + 100).ok());
+            go!(move || TokenWaiter::<usize>::set_rsp(id, j + 100).ok());
             // this will block until the rsp was set
             assert_eq!(waiter.wait_rsp(None).unwrap(), j + 100);
             // after wait we can get the id again
             let id = waiter.id().unwrap();
-            go!(move || TokenWaiter::set_rsp(id, j).ok());
+            go!(move || TokenWaiter::<usize>::set_rsp(id, j).ok());
             waiter.wait_rsp(std::time::Duration::from_secs(2)).unwrap()
         })
         .join()
@@ -57,7 +57,10 @@ fn test_token_waiter() {
 }
 ```
 
-The `ID` returned by `id()` keeps the waiter's shared state alive, so it can be
-safely sent to another coroutine or thread and used even after the `TokenWaiter`
-has been dropped. Stale ids (already consumed, superseded, or with a dropped
-waiter) are rejected, and `set_rsp` returns the response back in `Err`.
+`TokenWaiter` ids are plain `usize` values resolved through an internal
+process-global registry. An id can be sent to another coroutine or thread, or
+serialized (for example written to a network frame) and reconstructed with
+`ID::from_usize`, as long as it is used in the process that issued it. Stale,
+already consumed or wrongly typed ids are rejected, and `set_rsp` returns the
+response back in `Err`. The waiter can be moved freely; it does not need to be
+pinned.

@@ -1,35 +1,20 @@
 use crate::waiter::Waiter;
 
+use sharded_slab::Slab;
+
+use std::any::Any;
 use std::fmt;
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-/// shared state of a `TokenWaiter`, kept alive by outstanding [`ID`]s
-struct Inner<T> {
-    // 0 if no id is outstanding, otherwise the generation of the id
-    key: AtomicUsize,
-    // source of the id generations, never 0
-    gen: AtomicUsize,
-    waiter: Waiter<T>,
-}
+type RegistryValue = Arc<dyn Any + Send + Sync>;
 
-/// An id issued by [`TokenWaiter::id`].
-///
-/// The id holds a handle to the waiter's shared state, so it can be sent to
-/// another coroutine or thread and used with [`TokenWaiter::set_rsp`] even
-/// after the owning [`TokenWaiter`] has been dropped. It can be redeemed at
-/// most once; stale ids are rejected rather than delivered.
-pub struct ID<T> {
-    inner: Arc<Inner<T>>,
-    gen: usize,
-}
-
-impl<T> fmt::Debug for ID<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ID{{ gen: {} }}", self.gen)
-    }
+// process-global registry that maps serialized ids to waiter state
+fn registry() -> &'static Slab<RegistryValue> {
+    static REGISTRY: OnceLock<Slab<RegistryValue>> = OnceLock::new();
+    REGISTRY.get_or_init(Slab::new)
 }
 
 /// The waiter could not issue a new id because the previous id has not been
@@ -37,23 +22,64 @@ impl<T> fmt::Debug for ID<T> {
 #[derive(Debug)]
 pub struct Error;
 
-/// A token based waiter that needs no shared map or slab.
+struct Inner<T> {
+    // whether an id is outstanding; while true, `key` is its registry key
+    outstanding: AtomicBool,
+    key: AtomicUsize,
+    waiter: Waiter<T>,
+}
+
+/// An id issued by [`TokenWaiter::id`].
 ///
-/// The waiter stays with its owner (on the stack, in a `Box`, ...), while a
-/// lightweight [`ID`] is handed to whoever produces the response. Only one id
-/// may be outstanding at a time; once [`TokenWaiter::set_rsp`] accepts a
-/// response, a new id can be requested for the next round.
-pub struct TokenWaiter<T> {
+/// The id is a plain `usize` token that can be serialized and reconstructed
+/// with [`ID::from_usize`]. It is resolved through a process-global registry,
+/// so it is only meaningful in the process that issued it; unknown or stale
+/// ids are rejected by [`TokenWaiter::set_rsp`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ID(usize);
+
+impl ID {
+    /// Reconstruct an id from a `usize`, e.g. one received over the network.
+    ///
+    /// The id is validated when it is used with
+    /// [`TokenWaiter::set_rsp`]; an unknown or stale id makes that call
+    /// return `Err`.
+    pub fn from_usize(id: usize) -> Self {
+        ID(id)
+    }
+}
+
+impl From<ID> for usize {
+    fn from(id: ID) -> Self {
+        id.0
+    }
+}
+
+/// A token based waiter that needs no caller-managed map or slab.
+///
+/// The waiter stays with its owner (on the stack, in a `Box`, ...), while its
+/// [`ID`] is handed to whoever produces the response. The id is a plain
+/// `usize` token resolved through an internal process-global registry, so it
+/// can be serialized (e.g. written to a network frame) and reconstructed with
+/// [`ID::from_usize`], as long as it is used in the process that issued it.
+/// `T` must be `Send + 'static` because the waiter state is shared with the
+/// registry.
+///
+/// Only one id may be outstanding at a time; once [`TokenWaiter::set_rsp`]
+/// accepts a response, a new id can be requested for the next round. Stale,
+/// already consumed or wrongly typed ids are rejected and the response is
+/// returned back.
+pub struct TokenWaiter<T: Send + 'static> {
     inner: Arc<Inner<T>>,
 }
 
-impl<T> TokenWaiter<T> {
+impl<T: Send + 'static> TokenWaiter<T> {
     /// Create a new token waiter.
     pub fn new() -> Self {
         TokenWaiter {
             inner: Arc::new(Inner {
+                outstanding: AtomicBool::new(false),
                 key: AtomicUsize::new(0),
-                gen: AtomicUsize::new(0),
                 waiter: Waiter::new(),
             }),
         }
@@ -62,40 +88,26 @@ impl<T> TokenWaiter<T> {
     /// Issue an id for this waiter.
     ///
     /// Returns [`Error`] if a previously issued id has not been consumed by
-    /// [`TokenWaiter::set_rsp`] yet, since only one id may be outstanding at a
-    /// time. After `set_rsp` accepts the response, a new id can be requested
-    /// again.
-    pub fn id(&self) -> Result<ID<T>, Error> {
-        let gen = self.next_gen();
-        // only one id may be outstanding at a time, 0 means none
-        match self
+    /// [`TokenWaiter::set_rsp`] yet, since only one id may be outstanding
+    /// at a time. After `set_rsp` accepts the response, a new id can be
+    /// requested again.
+    pub fn id(&self) -> Result<ID, Error> {
+        // only one id may be outstanding at a time
+        if self
             .inner
-            .key
-            .compare_exchange(0, gen, Ordering::AcqRel, Ordering::Relaxed)
+            .outstanding
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
         {
-            Ok(_) => Ok(ID {
-                inner: Arc::clone(&self.inner),
-                gen,
-            }),
-            Err(_) => Err(Error),
+            return Err(Error);
         }
-    }
 
-    // take a fresh generation, never returning 0 so that 0 can mean "no id"
-    fn next_gen(&self) -> usize {
-        let mut gen = self.inner.gen.load(Ordering::Relaxed);
-        loop {
-            let next = if gen == usize::MAX { 1 } else { gen + 1 };
-            match self.inner.gen.compare_exchange_weak(
-                gen,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return next,
-                Err(actual) => gen = actual,
-            }
-        }
+        // register the waiter state so that it can be found from the id
+        let inner: Arc<Inner<T>> = Arc::clone(&self.inner);
+        let value: RegistryValue = inner;
+        let key = registry().insert(value).expect("no slot available");
+        self.inner.key.store(key, Ordering::Relaxed);
+        Ok(ID(key))
     }
 
     /// Block until the response is set by [`TokenWaiter::set_rsp`].
@@ -109,41 +121,60 @@ impl<T> TokenWaiter<T> {
 
     /// Set the response for the waiter that issued `id`.
     ///
-    /// The response is returned back in `Err` if the id has already been
-    /// consumed, if it has been superseded by a newer id, or if the
-    /// [`TokenWaiter`] itself has been dropped. The responder can thus learn
-    /// that the response was not delivered.
-    pub fn set_rsp(id: ID<T>, rsp: T) -> Result<(), T> {
-        // the `id` holds one `Arc<Inner>`, if it is the only one left then the
-        // `TokenWaiter` has already been dropped and nobody would wait for it
-        if Arc::strong_count(&id.inner) == 1 {
+    /// The response is returned back in `Err` if the id is unknown or stale,
+    /// has already been consumed, or was issued by a waiter with a different
+    /// response type. The responder can thus learn that the response was not
+    /// delivered.
+    pub fn set_rsp(id: ID, rsp: T) -> Result<(), T> {
+        let registry = registry();
+
+        // look the entry up and check its type before claiming it, so that an
+        // id of another response type cannot consume a live token
+        let entry = match registry.get(id.0) {
+            Some(entry) => entry,
+            None => return Err(rsp),
+        };
+        let value = Arc::clone(&*entry);
+        // `take` spins while the slot has outstanding references, so the guard
+        // must be released before claiming the token
+        drop(entry);
+
+        let inner = match value.downcast::<Inner<T>>() {
+            Ok(inner) => inner,
+            Err(_) => return Err(rsp),
+        };
+
+        // claim the token, only one caller can win
+        if registry.take(id.0).is_none() {
             return Err(rsp);
         }
-        // claim the outstanding id, a consumed or superseded id would fail
-        if id
-            .inner
-            .key
-            .compare_exchange(id.gen, 0, Ordering::AcqRel, Ordering::Relaxed)
-            .is_err()
-        {
-            return Err(rsp);
-        }
-        // the id is released before delivering the rsp so that `id()` can be
+
+        // release the token before delivering the rsp so that `id()` can be
         // called again right after `wait_rsp` returns
-        id.inner.waiter.set_rsp(rsp);
+        inner.outstanding.store(false, Ordering::Release);
+        inner.waiter.set_rsp(rsp);
         Ok(())
     }
 }
 
-impl<T> fmt::Debug for TokenWaiter<T> {
+impl<T: Send + 'static> Default for TokenWaiter<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Send + 'static> fmt::Debug for TokenWaiter<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "TokenWaiter{{ ... }}")
     }
 }
 
-impl<T> Default for TokenWaiter<T> {
-    fn default() -> Self {
-        TokenWaiter::new()
+impl<T: Send + 'static> Drop for TokenWaiter<T> {
+    fn drop(&mut self) {
+        // release a registry entry that was never claimed
+        if self.inner.outstanding.load(Ordering::Acquire) {
+            registry().remove(self.inner.key.load(Ordering::Relaxed));
+        }
     }
 }
 
@@ -153,46 +184,92 @@ mod tests {
     use may::go;
 
     #[test]
-    fn token_waiter_id() {
+    fn token_waiter_round_trip() {
+        let waiter = TokenWaiter::<usize>::new();
+        let raw: usize = waiter.id().unwrap().into();
+
+        // the id is serialized and reconstructed on the responder side
+        go!(move || {
+            let id = ID::from_usize(raw);
+            TokenWaiter::<usize>::set_rsp(id, 100).unwrap();
+        });
+
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 100);
+
+        // the same id cannot be redeemed twice
+        let id = ID::from_usize(raw);
+        assert_eq!(TokenWaiter::<usize>::set_rsp(id, 200), Err(200));
+
+        // a new id can be issued for the next round
+        let raw: usize = waiter.id().unwrap().into();
+        go!(move || {
+            let id = ID::from_usize(raw);
+            TokenWaiter::<usize>::set_rsp(id, 300).unwrap();
+        });
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 300);
+    }
+
+    #[test]
+    fn token_waiter_stale_id() {
+        let waiter = TokenWaiter::<usize>::new();
+        let raw: usize = waiter.id().unwrap().into();
+        drop(waiter);
+
+        // using the id after the waiter is gone is safe and rejected
+        let id = ID::from_usize(raw);
+        assert_eq!(TokenWaiter::<usize>::set_rsp(id, 42), Err(42));
+    }
+
+    #[test]
+    fn token_waiter_wrong_type() {
+        let waiter = TokenWaiter::<usize>::new();
+        let raw: usize = waiter.id().unwrap().into();
+
+        // a response of the wrong type must not consume the token
+        let res = TokenWaiter::<String>::set_rsp(ID::from_usize(raw), "wrong".into());
+        assert!(res.is_err());
+
+        go!(move || {
+            let id = ID::from_usize(raw);
+            TokenWaiter::<usize>::set_rsp(id, 7).unwrap();
+        });
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 7);
+    }
+
+    #[test]
+    fn token_waiter_one_id_at_a_time() {
         let waiter = TokenWaiter::<usize>::new();
         assert!(waiter.id().is_ok());
-        // the previous id should be consumed
         assert!(waiter.id().is_err());
     }
 
     #[test]
-    fn token_waiter() {
-        for j in 0..100 {
-            let result = go!(move || {
-                let waiter = TokenWaiter::<usize>::new();
-                let id = waiter.id().unwrap();
-                // trigger the rsp in another coroutine
-                go!(move || TokenWaiter::set_rsp(id, j + 100).unwrap());
-                // this will block until the rsp was set
-                assert_eq!(waiter.wait_rsp(None).unwrap(), j + 100);
-                // after wait we can get the id again
-                let id = waiter.id().unwrap();
-                go!(move || TokenWaiter::set_rsp(id, j).unwrap());
-                waiter.wait_rsp(std::time::Duration::from_secs(2)).unwrap()
-            })
-            .join()
-            .unwrap();
+    fn token_waiter_moved() {
+        let waiter = TokenWaiter::<usize>::new();
+        let raw: usize = waiter.id().unwrap().into();
 
-            assert_eq!(result, j);
-        }
+        // the id is a registry key, not an address, so moving the waiter is
+        // harmless and it does not need to be pinned
+        let waiter = Box::new(waiter);
+        go!(move || {
+            let id = ID::from_usize(raw);
+            TokenWaiter::<usize>::set_rsp(id, 100).unwrap();
+        });
+        assert_eq!(waiter.wait_rsp(None).unwrap(), 100);
     }
 
     #[test]
     fn token_waiter_timeout() {
         let result = go!(|| {
             let waiter = TokenWaiter::<usize>::new();
-            let id = waiter.id().unwrap();
-            // trigger the rsp in another coroutine
+            let raw: usize = waiter.id().unwrap().into();
+
+            // trigger the rsp after the timeout expires
             let h = go!(move || {
                 may::coroutine::sleep(Duration::from_millis(102));
-                TokenWaiter::set_rsp(id, 42).ok()
+                TokenWaiter::<usize>::set_rsp(ID::from_usize(raw), 42).ok()
             });
-            // this will block until the rsp was set
+
             let ret = waiter.wait_rsp(Duration::from_millis(100));
             h.join().unwrap();
             ret
@@ -201,25 +278,5 @@ mod tests {
         .unwrap();
 
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn token_waiter_stale_id() {
-        let waiter = TokenWaiter::<usize>::new();
-        let id = waiter.id().unwrap();
-        // the waiter may be dropped while an id is still out there,
-        // using the id afterwards must be safe and rejected
-        drop(waiter);
-        assert_eq!(TokenWaiter::set_rsp(id, 42), Err(42));
-    }
-
-    #[test]
-    fn token_waiter_moved() {
-        let waiter = TokenWaiter::<usize>::new();
-        let id = waiter.id().unwrap();
-        // moving the waiter no longer invalidates the id
-        let waiter = Box::new(waiter);
-        go!(move || TokenWaiter::set_rsp(id, 100).unwrap());
-        assert_eq!(waiter.wait_rsp(None).unwrap(), 100);
     }
 }
